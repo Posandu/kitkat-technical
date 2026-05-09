@@ -5,6 +5,7 @@ import { getConfig } from "./routes/config";
 import { dispatchAlertFired, dispatchAlertResolved } from "./delivery";
 
 const THRESHOLD = 0.2;
+let evaluateChain: Promise<void> = Promise.resolve();
 
 function newAlertId(): string {
 	return `alert-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
@@ -62,7 +63,7 @@ export async function runChecks(): Promise<void> {
 	await evaluateAlertState(checkedAt);
 }
 
-export async function evaluateAlertState(now?: string): Promise<void> {
+async function evaluateAlertStateInternal(now?: string): Promise<void> {
 	const ts = now ?? new Date().toISOString();
 	const allProxies = await db.select().from(proxiesTable);
 	const total = allProxies.length;
@@ -120,4 +121,10 @@ export async function evaluateAlertState(now?: string): Promise<void> {
 			.returning();
 		dispatchAlertResolved(updated);
 	}
+}
+
+export function evaluateAlertState(now?: string): Promise<void> {
+	const run = evaluateChain.then(() => evaluateAlertStateInternal(now));
+	evaluateChain = run.catch(() => undefined);
+	return run;
 }

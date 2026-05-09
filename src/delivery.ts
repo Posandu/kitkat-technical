@@ -5,6 +5,9 @@ import { webhooks, webhookDeliveries, alerts as alertsTable } from "./db/schema"
 type AlertRow = typeof alertsTable.$inferSelect;
 
 const RETRYABLE_STATUSES = new Set([500, 502, 503, 504]);
+const MAX_REDIRECTS = 5;
+
+class NonRetryableDeliveryError extends Error {}
 
 function sleep(ms: number) {
 	return new Promise<void>((r) => setTimeout(r, ms));
@@ -12,20 +15,54 @@ function sleep(ms: number) {
 
 async function sendWithRetry(url: string, payload: object): Promise<void> {
 	let delay = 1000;
+	const body = JSON.stringify(payload);
 	while (true) {
 		try {
-			const res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(payload),
-			});
+			let currentUrl = url;
+			let redirects = 0;
+			let res: Response;
+
+			while (true) {
+				res = await fetch(currentUrl, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body,
+					redirect: "manual",
+				});
+
+				if (res.status >= 300 && res.status < 400) {
+					const location = res.headers.get("location");
+					if (!location) break;
+					if (redirects >= MAX_REDIRECTS) {
+						throw new NonRetryableDeliveryError(
+							`${url}: too many redirects`,
+						);
+					}
+					try {
+						currentUrl = new URL(location, currentUrl).toString();
+					} catch {
+						throw new NonRetryableDeliveryError(
+							`${url}: invalid redirect location`,
+						);
+					}
+					redirects += 1;
+					continue;
+				}
+
+				break;
+			}
+
+			if (res.status >= 200 && res.status < 300) return;
 			if (RETRYABLE_STATUSES.has(res.status)) {
 				await sleep(delay);
 				delay = Math.min(delay * 2, 30_000);
 				continue;
 			}
-			return;
-		} catch {
+			throw new NonRetryableDeliveryError(
+				`${url}: non-retryable status ${res.status}`,
+			);
+		} catch (err) {
+			if (err instanceof NonRetryableDeliveryError) throw err;
 			await sleep(delay);
 			delay = Math.min(delay * 2, 30_000);
 		}
