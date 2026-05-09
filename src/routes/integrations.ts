@@ -34,7 +34,7 @@ export const integrationsRoutes = new Elysia({ prefix: "/integrations" }).post(
 	{
 		body: t.Object(
 			{
-				type: t.Union([t.Literal("slack"), t.Literal("discord")]),
+				type: t.Union([t.Literal("standard"), t.Literal("slack"), t.Literal("discord")]),
 				webhook_url: t.String(),
 				username: t.Optional(t.String()),
 				events: t.Optional(t.Array(t.String())),

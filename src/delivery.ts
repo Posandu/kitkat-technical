@@ -122,6 +122,12 @@ function standardResolved(alert: AlertRow) {
 		event: "alert.resolved",
 		alert_id: alert.alertId,
 		resolved_at: alert.resolvedAt,
+		failure_rate: alert.failureRate,
+		total_proxies: alert.totalProxies,
+		failed_proxies: alert.failedProxies,
+		failed_proxy_ids: parsedIds(alert),
+		threshold: alert.threshold,
+		message: alert.message,
 	};
 }
 
@@ -162,7 +168,7 @@ function slackResolved(alert: AlertRow, username: string) {
 					{ title: "Failed Proxies", value: String(alert.failedProxies) },
 					{ title: "Threshold", value: `${(alert.threshold * 100).toFixed(1)}%` },
 					{ title: "Failed IDs", value: ids.join(", ") || "none" },
-					{ title: "Fired At", value: alert.firedAt },
+					{ title: "Resolved At", value: alert.resolvedAt ?? "pending" },
 				],
 				footer: "ProxyMaze Monitor",
 				ts: Math.floor(new Date(alert.resolvedAt ?? alert.firedAt).getTime() / 1000),

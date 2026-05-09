@@ -19,7 +19,7 @@ export const proxiesRoutes = new Elysia({ prefix: "/proxies" })
 
 		const up = rows.filter((r) => r.status === "up").length;
 		const timeout = rows.filter((r) => r.status === "timeout").length;
-		const http_5xx = rows.filter((r) => r.status === "http_5xx").length;
+		const http_5xx = rows.filter((r) => r.status === "5xx").length;
 		const down = rows.filter((r) => r.status !== "up").length;
 		const total = rows.length;
 		const failure_rate = total > 0 ? down / total : 0;
