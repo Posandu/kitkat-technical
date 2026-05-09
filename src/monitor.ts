@@ -121,10 +121,6 @@ export async function evaluateAlertState(now?: string): Promise<void> {
 			.set({
 				status: "resolved",
 				resolvedAt: ts,
-				failureRate,
-				totalProxies: total,
-				failedProxies: downProxies.length,
-				failedProxyIds: JSON.stringify(failedIds),
 			})
 			.where(eq(alertsTable.alertId, activeAlert.alertId))
 			.returning();
