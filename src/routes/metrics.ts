@@ -18,25 +18,42 @@ export function calculateFailureRate(results: boolean[]): number {
 }
 
 
-// dossier stats logic
-export function getDossierStats(results: boolean[]) {
+// Define proxy structure
+type ProxyEntry = {
+  id: string;
+  url: string;
+  status: "up" | "down";
+  last_checked_at: string;
+  consecutive_failures: number;
+};
 
-  const total = results.length;
 
-  const up = results.filter(r => r === true).length;
+// Generate dossier statistics
+export function getDossierStats(proxies: ProxyEntry[]) {
 
-  const down = total - up;
+  // total proxies
+  const total = proxies.length;
 
-  const failureRate = total === 0 ? 0 : down / total;
+  // count UP proxies
+  const up = proxies.filter(p => p.status === "up").length;
 
+  // count DOWN proxies
+  const down = proxies.filter(p => p.status === "down").length;
+
+  // calculate failure rate
+  const failure_rate = total === 0 ? 0 : down / total;
+
+  // final response object
   return {
     total,
     up,
     down,
-    failureRate
+    failure_rate,
+
+    // include full proxy entries
+    proxies
   };
 }
-
 
 export const metricsRoutes = new Elysia({ prefix: "/metrics" }).get(
 	"/",
