@@ -18,6 +18,26 @@ export function calculateFailureRate(results: boolean[]): number {
 }
 
 
+// dossier stats logic
+export function getDossierStats(results: boolean[]) {
+
+  const total = results.length;
+
+  const up = results.filter(r => r === true).length;
+
+  const down = total - up;
+
+  const failureRate = total === 0 ? 0 : down / total;
+
+  return {
+    total,
+    up,
+    down,
+    failureRate
+  };
+}
+
+
 export const metricsRoutes = new Elysia({ prefix: "/metrics" }).get(
 	"/",
 	() => ({ message: "ok" }),
