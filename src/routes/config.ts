@@ -3,6 +3,13 @@ import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { config as configTable } from "../db/schema";
 
+type ConfigChangeListener = () => void;
+const listeners = new Set<ConfigChangeListener>();
+
+export function onConfigChange(fn: ConfigChangeListener): void {
+	listeners.add(fn);
+}
+
 type Config = {
 	checkIntervalSeconds: number;
 	requestTimeoutMs: number;
@@ -54,6 +61,13 @@ export const configRoutes = new Elysia({ prefix: "/config" })
 				.update(configTable)
 				.set(configStore)
 				.where(eq(configTable.id, configRowId));
+			for (const fn of listeners) {
+				try {
+					fn();
+				} catch (err) {
+					console.error("[config] listener error:", err);
+				}
+			}
 			return toSnake(configStore);
 		},
 		{

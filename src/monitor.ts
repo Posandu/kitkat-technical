@@ -19,7 +19,7 @@ async function probeProxy(
 
 	try {
 		const res = await fetch(url, { signal: controller.signal });
-		return res.ok || (res.status >= 200 && res.status < 300) ? "up" : "down";
+		return res.status >= 200 && res.status < 300 ? "up" : "down";
 	} catch {
 		return "down";
 	} finally {
@@ -30,46 +30,46 @@ async function probeProxy(
 export async function runChecks(): Promise<void> {
 	const { requestTimeoutMs } = getConfig();
 	const rows = await db.select().from(proxiesTable);
-
-	if (rows.length === 0) return;
-
 	const checkedAt = new Date().toISOString();
 
-	const results = await Promise.all(
-		rows.map(async (proxy) => {
-			const status = await probeProxy(proxy.url, requestTimeoutMs);
-			return { proxy, status };
-		}),
-	);
+	if (rows.length > 0) {
+		const results = await Promise.all(
+			rows.map(async (proxy) => {
+				const status = await probeProxy(proxy.url, requestTimeoutMs);
+				return { proxy, status };
+			}),
+		);
 
-	await Promise.all(
-		results.map(async ({ proxy, status }) => {
-			const consecutiveFailures =
-				status === "down" ? proxy.consecutiveFailures + 1 : 0;
+		await Promise.all(
+			results.map(async ({ proxy, status }) => {
+				const consecutiveFailures =
+					status === "down" ? proxy.consecutiveFailures + 1 : 0;
 
-			await db
-				.update(proxiesTable)
-				.set({ status, lastCheckedAt: checkedAt, consecutiveFailures })
-				.where(eq(proxiesTable.id, proxy.id));
+				await db
+					.update(proxiesTable)
+					.set({ status, lastCheckedAt: checkedAt, consecutiveFailures })
+					.where(eq(proxiesTable.id, proxy.id));
 
-			await db.insert(proxyHistory).values({
-				proxyId: proxy.id,
-				status,
-				checkedAt,
-			});
-		}),
-	);
+				await db.insert(proxyHistory).values({
+					proxyId: proxy.id,
+					status,
+					checkedAt,
+				});
+			}),
+		);
+	}
 
-	await evaluateAlerts(checkedAt);
+	await evaluateAlertState(checkedAt);
 }
 
-async function evaluateAlerts(now: string): Promise<void> {
+export async function evaluateAlertState(now?: string): Promise<void> {
+	const ts = now ?? new Date().toISOString();
 	const allProxies = await db.select().from(proxiesTable);
 	const total = allProxies.length;
-	if (total === 0) return;
 
 	const downProxies = allProxies.filter((p) => p.status === "down");
-	const failureRate = downProxies.length / total;
+	const failedIds = downProxies.map((p) => p.id);
+	const failureRate = total > 0 ? downProxies.length / total : 0;
 
 	const [activeAlert] = await db
 		.select()
@@ -77,7 +77,9 @@ async function evaluateAlerts(now: string): Promise<void> {
 		.where(eq(alertsTable.status, "active"))
 		.limit(1);
 
-	if (failureRate >= THRESHOLD && !activeAlert) {
+	const breached = total > 0 && failureRate >= THRESHOLD;
+
+	if (breached && !activeAlert) {
 		const [inserted] = await db
 			.insert(alertsTable)
 			.values({
@@ -86,27 +88,34 @@ async function evaluateAlerts(now: string): Promise<void> {
 				failureRate,
 				totalProxies: total,
 				failedProxies: downProxies.length,
-				failedProxyIds: JSON.stringify(downProxies.map((p) => p.id)),
+				failedProxyIds: JSON.stringify(failedIds),
 				threshold: THRESHOLD,
-				firedAt: now,
+				firedAt: ts,
 				message: "Proxy pool failure rate exceeded threshold",
 			})
 			.returning();
 		dispatchAlertFired(inserted);
-	} else if (failureRate >= THRESHOLD && activeAlert) {
+	} else if (breached && activeAlert) {
 		await db
 			.update(alertsTable)
 			.set({
 				failureRate,
 				totalProxies: total,
 				failedProxies: downProxies.length,
-				failedProxyIds: JSON.stringify(downProxies.map((p) => p.id)),
+				failedProxyIds: JSON.stringify(failedIds),
 			})
 			.where(eq(alertsTable.alertId, activeAlert.alertId));
-	} else if (failureRate < THRESHOLD && activeAlert) {
+	} else if (!breached && activeAlert) {
 		const [updated] = await db
 			.update(alertsTable)
-			.set({ status: "resolved", resolvedAt: now })
+			.set({
+				status: "resolved",
+				resolvedAt: ts,
+				failureRate,
+				totalProxies: total,
+				failedProxies: downProxies.length,
+				failedProxyIds: JSON.stringify(failedIds),
+			})
 			.where(eq(alertsTable.alertId, activeAlert.alertId))
 			.returning();
 		dispatchAlertResolved(updated);

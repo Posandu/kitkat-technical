@@ -1,7 +1,8 @@
 import Elysia, { t } from "elysia";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "../db";
 import { proxies as proxiesTable, proxyHistory } from "../db/schema";
+import { evaluateAlertState } from "../monitor";
 
 function extractId(rawUrl: string): string {
 	try {
@@ -42,28 +43,50 @@ export const proxiesRoutes = new Elysia({ prefix: "/proxies" })
 
 			if (replace) {
 				await db.delete(proxiesTable);
+				await db.delete(proxyHistory);
 			}
 
-			const rows = proxies.map((url) => ({
-				id: extractId(url),
-				url,
-				status: "pending" as const,
-			}));
+			const seen = new Set<string>();
+			const incoming: { id: string; url: string }[] = [];
+			for (const url of proxies) {
+				const id = extractId(url);
+				if (seen.has(id)) continue;
+				seen.add(id);
+				incoming.push({ id, url });
+			}
 
-			const inserted = await db
-				.insert(proxiesTable)
-				.values(rows)
-				.onConflictDoNothing()
-				.returning({
-					id: proxiesTable.id,
-					url: proxiesTable.url,
-					status: proxiesTable.status,
-				});
+			if (incoming.length > 0) {
+				await db
+					.insert(proxiesTable)
+					.values(
+						incoming.map((p) => ({
+							id: p.id,
+							url: p.url,
+							status: "pending" as const,
+						})),
+					)
+					.onConflictDoNothing();
+			}
+
+			const ids = incoming.map((p) => p.id);
+			const rows =
+				ids.length > 0
+					? await db
+							.select()
+							.from(proxiesTable)
+							.where(inArray(proxiesTable.id, ids))
+					: [];
+
+			await evaluateAlertState();
 
 			set.status = 201;
 			return {
-				accepted: inserted.length,
-				proxies: inserted,
+				accepted: rows.length,
+				proxies: rows.map((r) => ({
+					id: r.id,
+					url: r.url,
+					status: r.status,
+				})),
 			};
 		},
 		{
@@ -78,6 +101,8 @@ export const proxiesRoutes = new Elysia({ prefix: "/proxies" })
 	)
 	.delete("/", async ({ set }) => {
 		await db.delete(proxiesTable);
+		await db.delete(proxyHistory);
+		await evaluateAlertState();
 		set.status = 204;
 	})
 	.get("/:id", async ({ params, set }) => {
