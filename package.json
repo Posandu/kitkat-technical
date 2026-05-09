@@ -6,7 +6,8 @@
     "dev": "bun run --watch src/index.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:destroy": "rm -f sqlite.db"
   },
   "dependencies": {
     "@elysiajs/swagger": "^1.3.1",
@@ -14,7 +15,6 @@
     "elysia": "latest"
   },
   "devDependencies": {
-    "better-sqlite3": "^12.9.0",
     "bun-types": "latest",
     "drizzle-kit": "^0.31.10"
   },

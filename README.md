@@ -67,3 +67,4 @@ http://localhost:3000/swagger
 | -------------------- | ------------------------------------ |
 | `bun run db:push`    | Apply schema changes to `sqlite.db`  |
 | `bun run db:studio`  | Open Drizzle Studio (visual DB UI)   |
+| `bun run db:destroy` | Delete the `sqlite.db` file entirely |
