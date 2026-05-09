@@ -1,6 +1,10 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db";
-import { proxies as proxiesTable, proxyHistory, alerts as alertsTable } from "./db/schema";
+import {
+	proxies as proxiesTable,
+	proxyHistory,
+	alerts as alertsTable,
+} from "./db/schema";
 import { getConfig } from "./routes/config";
 import { dispatchAlertFired, dispatchAlertResolved } from "./delivery";
 

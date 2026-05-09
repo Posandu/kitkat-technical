@@ -1,35 +1,88 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "./db";
-import { webhooks, webhookDeliveries, alerts as alertsTable } from "./db/schema";
+import {
+	webhooks,
+	webhookDeliveries,
+	alerts as alertsTable,
+} from "./db/schema";
 
 type AlertRow = typeof alertsTable.$inferSelect;
 
-const RETRYABLE_STATUSES = new Set([500, 502, 503, 504]);
+const WEBHOOK_TIMEOUT_MS = 10_000;
+const MAX_ATTEMPTS = 5;
+const BASE_DELAY_MS = 1_000;
+const MAX_DELAY_MS = 30_000;
+const EXPLICIT_RETRYABLE_STATUSES = new Set([408, 429]);
 
 function sleep(ms: number) {
 	return new Promise<void>((r) => setTimeout(r, ms));
 }
 
-async function sendWithRetry(url: string, payload: object): Promise<void> {
-	let delay = 1000;
-	while (true) {
+function isRetryableStatus(status: number): boolean {
+	return status >= 500 || EXPLICIT_RETRYABLE_STATUSES.has(status);
+}
+
+function parseRetryAfter(header: string | null): number | null {
+	if (!header) return null;
+	const seconds = Number(header);
+	if (Number.isFinite(seconds) && seconds >= 0) {
+		return Math.min(seconds * 1000, MAX_DELAY_MS);
+	}
+	const dateMs = Date.parse(header);
+	if (Number.isFinite(dateMs)) {
+		return Math.max(0, Math.min(dateMs - Date.now(), MAX_DELAY_MS));
+	}
+	return null;
+}
+
+async function sendWithRetry(url: string, payload: object): Promise<boolean> {
+	let delay = BASE_DELAY_MS;
+	let lastError = "unknown error";
+
+	for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
+
+		let res: Response;
 		try {
-			const res = await fetch(url, {
+			res = await fetch(url, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(payload),
+				signal: controller.signal,
 			});
-			if (RETRYABLE_STATUSES.has(res.status)) {
-				await sleep(delay);
-				delay = Math.min(delay * 2, 30_000);
-				continue;
-			}
-			return;
-		} catch {
+		} catch (err) {
+			clearTimeout(timer);
+			lastError =
+				err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+			if (attempt === MAX_ATTEMPTS) break;
 			await sleep(delay);
-			delay = Math.min(delay * 2, 30_000);
+			delay = Math.min(delay * 2, MAX_DELAY_MS);
+			continue;
 		}
+		clearTimeout(timer);
+
+		if (res.status >= 200 && res.status < 300) return true;
+
+		if (!isRetryableStatus(res.status)) {
+			console.error(
+				`[delivery] ${url}: non-retryable status ${res.status} on attempt ${attempt}`,
+			);
+			return false;
+		}
+
+		lastError = `status ${res.status}`;
+		if (attempt === MAX_ATTEMPTS) break;
+
+		const retryAfter = parseRetryAfter(res.headers.get("retry-after"));
+		await sleep(retryAfter ?? delay);
+		delay = Math.min(delay * 2, MAX_DELAY_MS);
 	}
+
+	console.error(
+		`[delivery] ${url}: failed after ${MAX_ATTEMPTS} attempts: ${lastError}`,
+	);
+	return false;
 }
 
 async function deliver(
@@ -53,7 +106,8 @@ async function deliver(
 
 	if (existing) return;
 
-	await sendWithRetry(url, payload);
+	const ok = await sendWithRetry(url, payload);
+	if (!ok) return;
 
 	await db.insert(webhookDeliveries).values({
 		webhookId,
@@ -105,9 +159,15 @@ function slackFired(alert: AlertRow, username: string) {
 				color: "#FF0000",
 				fields: [
 					{ title: "Alert ID", value: alert.alertId },
-					{ title: "Failure Rate", value: `${(alert.failureRate * 100).toFixed(1)}%` },
+					{
+						title: "Failure Rate",
+						value: `${(alert.failureRate * 100).toFixed(1)}%`,
+					},
 					{ title: "Failed Proxies", value: String(alert.failedProxies) },
-					{ title: "Threshold", value: `${(alert.threshold * 100).toFixed(1)}%` },
+					{
+						title: "Threshold",
+						value: `${(alert.threshold * 100).toFixed(1)}%`,
+					},
 					{ title: "Failed IDs", value: ids.join(", ") || "none" },
 					{ title: "Fired At", value: alert.firedAt },
 				],
@@ -128,14 +188,22 @@ function slackResolved(alert: AlertRow, username: string) {
 				color: "#36A64F",
 				fields: [
 					{ title: "Alert ID", value: alert.alertId },
-					{ title: "Failure Rate", value: `${(alert.failureRate * 100).toFixed(1)}%` },
+					{
+						title: "Failure Rate",
+						value: `${(alert.failureRate * 100).toFixed(1)}%`,
+					},
 					{ title: "Failed Proxies", value: String(alert.failedProxies) },
-					{ title: "Threshold", value: `${(alert.threshold * 100).toFixed(1)}%` },
+					{
+						title: "Threshold",
+						value: `${(alert.threshold * 100).toFixed(1)}%`,
+					},
 					{ title: "Failed IDs", value: ids.join(", ") || "none" },
 					{ title: "Fired At", value: alert.firedAt },
 				],
 				footer: "ProxyMaze Monitor",
-				ts: Math.floor(new Date(alert.resolvedAt ?? alert.firedAt).getTime() / 1000),
+				ts: Math.floor(
+					new Date(alert.resolvedAt ?? alert.firedAt).getTime() / 1000,
+				),
 			},
 		],
 	};
@@ -151,9 +219,15 @@ function discordFired(alert: AlertRow) {
 				color: 16711680,
 				fields: [
 					{ name: "Alert ID", value: alert.alertId },
-					{ name: "Failure Rate", value: `${(alert.failureRate * 100).toFixed(1)}%` },
+					{
+						name: "Failure Rate",
+						value: `${(alert.failureRate * 100).toFixed(1)}%`,
+					},
 					{ name: "Failed Proxies", value: String(alert.failedProxies) },
-					{ name: "Threshold", value: `${(alert.threshold * 100).toFixed(1)}%` },
+					{
+						name: "Threshold",
+						value: `${(alert.threshold * 100).toFixed(1)}%`,
+					},
 					{ name: "Failed IDs", value: ids.join(", ") || "none" },
 				],
 				footer: { text: "ProxyMaze Monitor" },
@@ -172,9 +246,15 @@ function discordResolved(alert: AlertRow) {
 				color: 3580392,
 				fields: [
 					{ name: "Alert ID", value: alert.alertId },
-					{ name: "Failure Rate", value: `${(alert.failureRate * 100).toFixed(1)}%` },
+					{
+						name: "Failure Rate",
+						value: `${(alert.failureRate * 100).toFixed(1)}%`,
+					},
 					{ name: "Failed Proxies", value: String(alert.failedProxies) },
-					{ name: "Threshold", value: `${(alert.threshold * 100).toFixed(1)}%` },
+					{
+						name: "Threshold",
+						value: `${(alert.threshold * 100).toFixed(1)}%`,
+					},
 					{ name: "Failed IDs", value: ids.join(", ") || "none" },
 				],
 				footer: { text: "ProxyMaze Monitor" },
@@ -185,7 +265,10 @@ function discordResolved(alert: AlertRow) {
 
 // ── Public dispatch functions ───────────────────────────────────────────────
 
-async function dispatchToAll(alert: AlertRow, event: "alert.fired" | "alert.resolved") {
+async function dispatchToAll(
+	alert: AlertRow,
+	event: "alert.fired" | "alert.resolved",
+) {
 	const allWebhooks = await db.select().from(webhooks);
 
 	await Promise.all(
@@ -202,9 +285,15 @@ async function dispatchToAll(alert: AlertRow, event: "alert.fired" | "alert.reso
 						? slackFired(alert, wh.username ?? "ProxyWatch")
 						: slackResolved(alert, wh.username ?? "ProxyWatch");
 			} else if (wh.type === "discord") {
-				payload = event === "alert.fired" ? discordFired(alert) : discordResolved(alert);
+				payload =
+					event === "alert.fired"
+						? discordFired(alert)
+						: discordResolved(alert);
 			} else {
-				payload = event === "alert.fired" ? standardFired(alert) : standardResolved(alert);
+				payload =
+					event === "alert.fired"
+						? standardFired(alert)
+						: standardResolved(alert);
 			}
 
 			try {
