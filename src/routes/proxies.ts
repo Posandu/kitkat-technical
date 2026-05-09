@@ -1,6 +1,7 @@
 import Elysia, { t } from "elysia";
+import { eq } from "drizzle-orm";
 import { db } from "../db";
-import { proxies as proxiesTable } from "../db/schema";
+import { proxies as proxiesTable, proxyHistory } from "../db/schema";
 
 function extractId(rawUrl: string): string {
 	try {
@@ -79,5 +80,63 @@ export const proxiesRoutes = new Elysia({ prefix: "/proxies" })
 		await db.delete(proxiesTable);
 		set.status = 204;
 	})
-	.get("/:id", ({ params }) => ({ message: "ok", id: params.id }))
-	.get("/:id/history", ({ params }) => ({ message: "ok", id: params.id }));
+	.get("/:id", async ({ params, set }) => {
+		const [proxy] = await db
+			.select()
+			.from(proxiesTable)
+			.where(eq(proxiesTable.id, params.id))
+			.limit(1);
+
+		if (!proxy) {
+			set.status = 404;
+			return { error: "Not Found" };
+		}
+
+		const history = await db
+			.select()
+			.from(proxyHistory)
+			.where(eq(proxyHistory.proxyId, params.id));
+
+		const total_checks = history.length;
+		const upCount = history.filter((h) => h.status === "up").length;
+		const uptime_percentage =
+			total_checks > 0
+				? Math.round((upCount / total_checks) * 1000) / 10
+				: 0;
+
+		return {
+			id: proxy.id,
+			url: proxy.url,
+			status: proxy.status,
+			last_checked_at: proxy.lastCheckedAt,
+			consecutive_failures: proxy.consecutiveFailures,
+			total_checks,
+			uptime_percentage,
+			history: history.map((h) => ({
+				checked_at: h.checkedAt,
+				status: h.status,
+			})),
+		};
+	})
+	.get("/:id/history", async ({ params, set }) => {
+		const [proxy] = await db
+			.select()
+			.from(proxiesTable)
+			.where(eq(proxiesTable.id, params.id))
+			.limit(1);
+
+		if (!proxy) {
+			set.status = 404;
+			return { error: "Not Found" };
+		}
+
+		const history = await db
+			.select()
+			.from(proxyHistory)
+			.where(eq(proxyHistory.proxyId, params.id));
+
+		return history.map((h) => ({
+			checked_at: h.checkedAt,
+			status: h.status,
+		}));
+	});

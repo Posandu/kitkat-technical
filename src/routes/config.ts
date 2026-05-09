@@ -36,22 +36,33 @@ export async function loadConfig() {
 	}
 }
 
+function toSnake(c: Config) {
+	return {
+		check_interval_seconds: c.checkIntervalSeconds,
+		request_timeout_ms: c.requestTimeoutMs,
+	};
+}
+
 export const configRoutes = new Elysia({ prefix: "/config" })
-	.get("/", () => configStore)
+	.get("/", () => toSnake(configStore))
 	.post(
 		"/",
 		async ({ body }) => {
-			Object.assign(configStore, body);
+			configStore.checkIntervalSeconds = body.check_interval_seconds;
+			configStore.requestTimeoutMs = body.request_timeout_ms;
 			await db
 				.update(configTable)
 				.set(configStore)
 				.where(eq(configTable.id, configRowId));
-			return configStore;
+			return toSnake(configStore);
 		},
 		{
-			body: t.Object({
-				checkIntervalSeconds: t.Number(),
-				requestTimeoutMs: t.Number(),
-			}),
+			body: t.Object(
+				{
+					check_interval_seconds: t.Number(),
+					request_timeout_ms: t.Number(),
+				},
+				{ additionalProperties: true },
+			),
 		},
 	);
