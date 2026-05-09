@@ -22,7 +22,12 @@ async function probeProxy(
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 
 	try {
-		const res = await fetch(url, { signal: controller.signal });
+		const res = await fetch(url, {
+			signal: controller.signal,
+			cache: "no-store",
+			redirect: "manual",
+		});
+		await res.arrayBuffer().catch(() => {});
 		return res.status >= 200 && res.status < 300 ? "up" : "down";
 	} catch {
 		return "down";
@@ -66,62 +71,68 @@ export async function runChecks(): Promise<void> {
 	await evaluateAlertState(checkedAt);
 }
 
+let isEvaluating = false;
+
 export async function evaluateAlertState(now?: string): Promise<void> {
-	const ts = now ?? new Date().toISOString();
-	const allProxies = await db.select().from(proxiesTable);
-	const total = allProxies.length;
+	while (isEvaluating) {
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	isEvaluating = true;
+	try {
+		const ts = now ?? new Date().toISOString();
+		const allProxies = await db.select().from(proxiesTable);
+		const total = allProxies.length;
 
-	const downProxies = allProxies.filter((p) => p.status === "down");
-	const failedIds = downProxies.map((p) => p.id);
-	const failureRate = total > 0 ? downProxies.length / total : 0;
+		const downProxies = allProxies.filter((p) => p.status === "down");
+		const failedIds = downProxies.map((p) => p.id).sort();
+		const failureRate = total > 0 ? downProxies.length / total : 0;
 
-	const [activeAlert] = await db
-		.select()
-		.from(alertsTable)
-		.where(eq(alertsTable.status, "active"))
-		.limit(1);
+		const [activeAlert] = await db
+			.select()
+			.from(alertsTable)
+			.where(eq(alertsTable.status, "active"))
+			.limit(1);
 
-	const breached = total > 0 && failureRate >= THRESHOLD;
+		const breached = total > 0 && failureRate >= THRESHOLD;
 
-	if (breached && !activeAlert) {
-		const [inserted] = await db
-			.insert(alertsTable)
-			.values({
-				alertId: newAlertId(),
-				status: "active",
-				failureRate,
-				totalProxies: total,
-				failedProxies: downProxies.length,
-				failedProxyIds: JSON.stringify(failedIds),
-				threshold: THRESHOLD,
-				firedAt: ts,
-				message: "Proxy pool failure rate exceeded threshold",
-			})
-			.returning();
-		dispatchAlertFired(inserted);
-	} else if (breached && activeAlert) {
-		await db
-			.update(alertsTable)
-			.set({
-				failureRate,
-				totalProxies: total,
-				failedProxies: downProxies.length,
-				failedProxyIds: JSON.stringify(failedIds),
-			})
-			.where(eq(alertsTable.alertId, activeAlert.alertId));
-	} else if (!breached && activeAlert) {
-		const [updated] = await db
-			.update(alertsTable)
-			.set({
-				status: "resolved",
-				resolvedAt: ts,
-				failureRate,
-				totalProxies: total,
-				failedProxies: downProxies.length,
-				failedProxyIds: JSON.stringify(failedIds),
-			})
-			.where(eq(alertsTable.alertId, activeAlert.alertId))
-			.returning();
-		dispatchAlertResolved(updated);
+		if (breached && !activeAlert) {
+			const [inserted] = await db
+				.insert(alertsTable)
+				.values({
+					alertId: newAlertId(),
+					status: "active",
+					failureRate,
+					totalProxies: total,
+					failedProxies: downProxies.length,
+					failedProxyIds: JSON.stringify(failedIds),
+					threshold: THRESHOLD,
+					firedAt: ts,
+					message: "Proxy pool failure rate exceeded threshold",
+				})
+				.returning();
+			dispatchAlertFired(inserted);
+		} else if (breached && activeAlert) {
+			await db
+				.update(alertsTable)
+				.set({
+					failureRate,
+					totalProxies: total,
+					failedProxies: downProxies.length,
+					failedProxyIds: JSON.stringify(failedIds),
+				})
+				.where(eq(alertsTable.alertId, activeAlert.alertId));
+		} else if (!breached && activeAlert) {
+			const [updated] = await db
+				.update(alertsTable)
+				.set({
+					status: "resolved",
+					resolvedAt: ts,
+				})
+				.where(eq(alertsTable.alertId, activeAlert.alertId))
+				.returning();
+			dispatchAlertResolved(updated);
+		}
+	} finally {
+		isEvaluating = false;
 	}
 }

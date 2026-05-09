@@ -9,10 +9,9 @@ import {
 type AlertRow = typeof alertsTable.$inferSelect;
 
 const WEBHOOK_TIMEOUT_MS = 10_000;
-const MAX_ATTEMPTS = 5;
 const BASE_DELAY_MS = 1_000;
 const MAX_DELAY_MS = 30_000;
-const EXPLICIT_RETRYABLE_STATUSES = new Set([408, 429]);
+const TRANSIENT_FAILURES = new Set([500, 502, 503, 504]);
 
 const STATIC_DISCORD_WEBHOOK_URL =
 	process.env.DISCORD_WEBHOOK_URL ??
@@ -24,7 +23,7 @@ function sleep(ms: number) {
 }
 
 function isRetryableStatus(status: number): boolean {
-	return status >= 500 || EXPLICIT_RETRYABLE_STATUSES.has(status);
+	return TRANSIENT_FAILURES.has(status);
 }
 
 function parseRetryAfter(header: string | null): number | null {
@@ -44,7 +43,7 @@ async function sendWithRetry(url: string, payload: object): Promise<boolean> {
 	let delay = BASE_DELAY_MS;
 	let lastError = "unknown error";
 
-	for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+	while (true) {
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
 
@@ -60,7 +59,6 @@ async function sendWithRetry(url: string, payload: object): Promise<boolean> {
 			clearTimeout(timer);
 			lastError =
 				err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-			if (attempt === MAX_ATTEMPTS) break;
 			await sleep(delay);
 			delay = Math.min(delay * 2, MAX_DELAY_MS);
 			continue;
@@ -71,23 +69,17 @@ async function sendWithRetry(url: string, payload: object): Promise<boolean> {
 
 		if (!isRetryableStatus(res.status)) {
 			console.error(
-				`[delivery] ${url}: non-retryable status ${res.status} on attempt ${attempt}`,
+				`[delivery] ${url}: non-retryable status ${res.status}`,
 			);
 			return false;
 		}
 
 		lastError = `status ${res.status}`;
-		if (attempt === MAX_ATTEMPTS) break;
 
 		const retryAfter = parseRetryAfter(res.headers.get("retry-after"));
 		await sleep(retryAfter ?? delay);
 		delay = Math.min(delay * 2, MAX_DELAY_MS);
 	}
-
-	console.error(
-		`[delivery] ${url}: failed after ${MAX_ATTEMPTS} attempts: ${lastError}`,
-	);
-	return false;
 }
 
 async function deliver(
@@ -214,9 +206,9 @@ function slackResolved(alert: AlertRow, username: string) {
 	};
 }
 
-function discordFired(alert: AlertRow) {
+function discordFired(alert: AlertRow, username?: string | null) {
 	const ids = parsedIds(alert);
-	return {
+	const payload: any = {
 		embeds: [
 			{
 				title: "Alert Fired",
@@ -239,11 +231,13 @@ function discordFired(alert: AlertRow) {
 			},
 		],
 	};
+	if (username) payload.username = username;
+	return payload;
 }
 
-function discordResolved(alert: AlertRow) {
+function discordResolved(alert: AlertRow, username?: string | null) {
 	const ids = parsedIds(alert);
-	return {
+	const payload: any = {
 		embeds: [
 			{
 				title: "Alert Resolved",
@@ -266,6 +260,8 @@ function discordResolved(alert: AlertRow) {
 			},
 		],
 	};
+	if (username) payload.username = username;
+	return payload;
 }
 
 // ── Public dispatch functions ───────────────────────────────────────────────
@@ -291,8 +287,8 @@ async function dispatchToAll(
 		} else if (wh.type === "discord") {
 			payload =
 				event === "alert.fired"
-					? discordFired(alert)
-					: discordResolved(alert);
+					? discordFired(alert, wh.username)
+					: discordResolved(alert, wh.username);
 		} else {
 			payload =
 				event === "alert.fired"
@@ -308,7 +304,7 @@ async function dispatchToAll(
 	});
 
 	const staticDiscordPayload =
-		event === "alert.fired" ? discordFired(alert) : discordResolved(alert);
+		event === "alert.fired" ? discordFired(alert, "ProxyWatch") : discordResolved(alert, "ProxyWatch");
 	const staticDispatch = (async () => {
 		try {
 			await deliver(
