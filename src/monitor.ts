@@ -93,6 +93,16 @@ async function evaluateAlerts(now: string): Promise<void> {
 			})
 			.returning();
 		dispatchAlertFired(inserted);
+	} else if (failureRate >= THRESHOLD && activeAlert) {
+		await db
+			.update(alertsTable)
+			.set({
+				failureRate,
+				totalProxies: total,
+				failedProxies: downProxies.length,
+				failedProxyIds: JSON.stringify(downProxies.map((p) => p.id)),
+			})
+			.where(eq(alertsTable.alertId, activeAlert.alertId));
 	} else if (failureRate < THRESHOLD && activeAlert) {
 		const [updated] = await db
 			.update(alertsTable)

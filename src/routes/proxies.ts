@@ -1,5 +1,5 @@
 import Elysia, { t } from "elysia";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { proxies as proxiesTable, proxyHistory } from "../db/schema";
 
@@ -95,7 +95,8 @@ export const proxiesRoutes = new Elysia({ prefix: "/proxies" })
 		const history = await db
 			.select()
 			.from(proxyHistory)
-			.where(eq(proxyHistory.proxyId, params.id));
+			.where(eq(proxyHistory.proxyId, params.id))
+			.orderBy(asc(proxyHistory.id));
 
 		const total_checks = history.length;
 		const upCount = history.filter((h) => h.status === "up").length;
@@ -133,7 +134,8 @@ export const proxiesRoutes = new Elysia({ prefix: "/proxies" })
 		const history = await db
 			.select()
 			.from(proxyHistory)
-			.where(eq(proxyHistory.proxyId, params.id));
+			.where(eq(proxyHistory.proxyId, params.id))
+			.orderBy(asc(proxyHistory.id));
 
 		return history.map((h) => ({
 			checked_at: h.checkedAt,
