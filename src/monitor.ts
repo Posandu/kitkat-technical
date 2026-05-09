@@ -94,7 +94,7 @@ export async function evaluateAlertState(now?: string): Promise<void> {
 				message: "Proxy pool failure rate exceeded threshold",
 			})
 			.returning();
-		dispatchAlertFired(inserted);
+		await dispatchAlertFired(inserted);
 	} else if (breached && activeAlert) {
 		await db
 			.update(alertsTable)
@@ -118,6 +118,6 @@ export async function evaluateAlertState(now?: string): Promise<void> {
 			})
 			.where(eq(alertsTable.alertId, activeAlert.alertId))
 			.returning();
-		dispatchAlertResolved(updated);
+		await dispatchAlertResolved(updated);
 	}
 }

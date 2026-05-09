@@ -190,7 +190,7 @@ async function dispatchToAll(alert: AlertRow, event: "alert.fired" | "alert.reso
 
 	await Promise.all(
 		allWebhooks.map(async (wh) => {
-			if (wh.events) {
+			if (wh.type !== "standard" && wh.events) {
 				const allowed = JSON.parse(wh.events) as string[];
 				if (!allowed.includes(event)) return;
 			}
@@ -216,14 +216,18 @@ async function dispatchToAll(alert: AlertRow, event: "alert.fired" | "alert.reso
 	);
 }
 
-export function dispatchAlertFired(alert: AlertRow): void {
-	dispatchToAll(alert, "alert.fired").catch((err) =>
-		console.error("[delivery] dispatchAlertFired error:", err),
-	);
+export async function dispatchAlertFired(alert: AlertRow): Promise<void> {
+	try {
+		await dispatchToAll(alert, "alert.fired");
+	} catch (err) {
+		console.error("[delivery] dispatchAlertFired error:", err);
+	}
 }
 
-export function dispatchAlertResolved(alert: AlertRow): void {
-	dispatchToAll(alert, "alert.resolved").catch((err) =>
-		console.error("[delivery] dispatchAlertResolved error:", err),
-	);
+export async function dispatchAlertResolved(alert: AlertRow): Promise<void> {
+	try {
+		await dispatchToAll(alert, "alert.resolved");
+	} catch (err) {
+		console.error("[delivery] dispatchAlertResolved error:", err);
+	}
 }
