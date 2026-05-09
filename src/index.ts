@@ -1,14 +1,30 @@
 import { Elysia } from "elysia";
 import { healthRoutes } from "./routes/health";
-import { configRoutes, loadConfig } from "./routes/config";
+import { configRoutes, loadConfig, getConfig } from "./routes/config";
 import { proxiesRoutes } from "./routes/proxies";
 import { alertsRoutes } from "./routes/alerts";
 import { webhooksRoutes } from "./routes/webhooks";
 import { integrationsRoutes } from "./routes/integrations";
 import { metricsRoutes } from "./routes/metrics";
 import swagger from "@elysiajs/swagger";
+import { runChecks } from "./monitor";
 
 await loadConfig();
+
+function scheduleNextCheck() {
+	const { checkIntervalSeconds } = getConfig();
+	setTimeout(async () => {
+		try {
+			await runChecks();
+		} catch (err) {
+			console.error("[monitor] check failed:", err);
+		} finally {
+			scheduleNextCheck();
+		}
+	}, checkIntervalSeconds * 1000);
+}
+
+scheduleNextCheck();
 
 const app = new Elysia()
 	.use(swagger())
