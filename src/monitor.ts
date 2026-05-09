@@ -5,6 +5,7 @@ import { getConfig } from "./routes/config";
 import { dispatchAlertFired, dispatchAlertResolved } from "./delivery";
 
 const THRESHOLD = 0.2;
+type ProxyStatus = "up" | "timeout" | "http_5xx" | "down";
 
 function newAlertId(): string {
 	return `alert-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
@@ -13,14 +14,20 @@ function newAlertId(): string {
 async function probeProxy(
 	url: string,
 	timeoutMs: number,
-): Promise<"up" | "down"> {
+): Promise<ProxyStatus> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 
 	try {
 		const res = await fetch(url, { signal: controller.signal });
-		return res.status >= 200 && res.status < 300 ? "up" : "down";
-	} catch {
+		if (res.status >= 200 && res.status < 300) return "up";
+		if (res.status >= 500) return "http_5xx";
+		return "down";
+	} catch (error) {
+		if (error instanceof Error && error.name === "AbortError") {
+			return "timeout";
+		}
+
 		return "down";
 	} finally {
 		clearTimeout(timer);
@@ -43,7 +50,7 @@ export async function runChecks(): Promise<void> {
 		await Promise.all(
 			results.map(async ({ proxy, status }) => {
 				const consecutiveFailures =
-					status === "down" ? proxy.consecutiveFailures + 1 : 0;
+					status === "up" ? 0 : proxy.consecutiveFailures + 1;
 
 				await db
 					.update(proxiesTable)
@@ -78,8 +85,8 @@ async function evaluateAlertStateUnsafe(now?: string): Promise<void> {
 	const allProxies = await db.select().from(proxiesTable);
 	const total = allProxies.length;
 
-	const downProxies = allProxies.filter((p) => p.status === "down");
-	const failedIds = downProxies.map((p) => p.id).sort();
+	const downProxies = allProxies.filter((p) => p.status !== "up");
+	const failedIds = downProxies.map((p) => p.id);
 	const failureRate = total > 0 ? downProxies.length / total : 0;
 
 	const [activeAlert] = await db
