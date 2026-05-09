@@ -16,7 +16,7 @@ type Config = {
 };
 
 const DEFAULT_CONFIG: Config = {
-	checkIntervalSeconds: 15,
+	checkIntervalSeconds: 2,
 	requestTimeoutMs: 3000,
 };
 

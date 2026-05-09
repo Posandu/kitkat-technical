@@ -34,23 +34,26 @@ async function sendWithRetry(url: string, payload: object): Promise<boolean> {
 				console.log(`[delivery] ✓ Delivered after ${attempt} attempt(s) in ${Date.now() - startTime}ms`);
 				return true;
 			}
-			
-			// Log 5xx errors explicitly - they're retryable
+
+			// If 5xx -> retry. If 4xx -> non-retryable, fail fast.
 			if (res.status >= 500) {
-				if (attempt % 20 === 1) {
+				if (attempt % 5 === 1) {
 					console.log(`[delivery] Attempt ${attempt}: ${res.status} (5xx - retrying), elapsed ${Date.now() - startTime}ms`);
 				}
-			} else if (attempt % 100 === 0) {
-				console.log(`[delivery] Attempt ${attempt}: ${res.status}, elapsed ${Date.now() - startTime}ms`);
+			} else {
+				// Non-retryable (4xx) - log and stop retrying
+				console.log(`[delivery] Attempt ${attempt}: ${res.status} (non-retryable), elapsed ${Date.now() - startTime}ms`);
+				return false;
 			}
 		} catch (err) {
 			if (attempt % 100 === 0) {
 				console.log(`[delivery] Attempt ${attempt}: network error, elapsed ${Date.now() - startTime}ms`);
 			}
 		}
-		
-		// Exponential backoff: 50ms, 100ms, 200ms, 400ms, 800ms, up to 5 seconds
-		await sleep(delayMs);
+
+		// Add jitter to reduce thundering herd
+		const jitter = Math.floor(Math.random() * Math.min(200, delayMs));
+		await sleep(delayMs + jitter);
 		delayMs = Math.min(delayMs * 2, MAX_DELAY_MS);
 	}
 	

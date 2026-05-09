@@ -74,9 +74,12 @@ const isDown = status !== "up";
 export async function evaluateAlertState(now?: string): Promise<void> {
 	const ts = now ?? new Date().toISOString();
 	const allProxies = await db.select().from(proxiesTable);
-	const total = allProxies.length;
 
-	const downProxies = allProxies.filter((p) => p.status !== "up");
+	// Exclude proxies that are still pending their first check from failure calculations.
+	const checkedProxies = allProxies.filter((p) => p.status !== "pending");
+	const total = checkedProxies.length;
+
+	const downProxies = checkedProxies.filter((p) => p.status !== "up");
 	const failedIds = downProxies.map((p) => p.id);
 	const failureRate = total > 0 ? downProxies.length / total : 0;
 
