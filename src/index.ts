@@ -6,8 +6,10 @@ import { alertsRoutes } from "./routes/alerts";
 import { webhooksRoutes } from "./routes/webhooks";
 import { integrationsRoutes } from "./routes/integrations";
 import { metricsRoutes } from "./routes/metrics";
+import swagger from "@elysiajs/swagger";
 
 const app = new Elysia()
+	.use(swagger())
 	.use(healthRoutes)
 	.use(configRoutes)
 	.use(proxiesRoutes)
