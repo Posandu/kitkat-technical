@@ -1,21 +1,15 @@
-## Setup
+# Elysia with Bun runtime
 
-### Prerequisites
-
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you don't have it:
-
-### Install dependencies
-
+## Getting Started
+To get started with this template, simply paste this command into your terminal:
 ```bash
-uv sync
+bun create elysia ./elysia-example
 ```
 
-This reads `pyproject.toml` and `uv.lock`, creates a virtual environment (`.venv`), and installs all dependencies.
-
-### Run
-
+## Development
+To start the development server run:
 ```bash
-uv run main.py
+bun run dev
 ```
 
-`uv run` automatically uses the project's virtual environment, so there's no need to activate it manually.
+Open http://localhost:3000/ with your browser to see the result.
