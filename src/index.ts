@@ -36,7 +36,7 @@ const app = new Elysia()
 	.use(webhooksRoutes)
 	.use(integrationsRoutes)
 	.use(metricsRoutes)
-	.listen(3000);
+	.listen(6969);
 
 console.log(
 	`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`,
