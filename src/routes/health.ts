@@ -1,9 +1,9 @@
 import Elysia from "elysia";
 
-<<<<<<< HEAD
-// UP / DOWN status
+// Converts to UP / DOWN status
 export function classifyHealth(statusCode?: number, error?: string): "UP" | "DOWN" {
 
+  // If there is an error → DOWN
   if (error) return "DOWN";
 
   // If status code exists
@@ -17,16 +17,12 @@ export function classifyHealth(statusCode?: number, error?: string): "UP" | "DOW
     return "DOWN";
   }
 
-  // default
+  // default fallback
   return "DOWN";
 }
 
 export const healthRoutes = new Elysia({ prefix: "/health" }).get(
-	"/",
-	() => ({ status: "ok" }),
+  "/",
+  () => ({status: "ok",})
 );
-=======
-export const healthRoutes = new Elysia({ prefix: "/health" }).get("/", () => ({
-	status: "ok",
-}));
->>>>>>> bb1e12918690a0010f5f4c68bbe9afd55e21d3ec
+
