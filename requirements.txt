@@ -1,0 +1,42 @@
+Proxy Maze Integration Requirements
+
+1. The main project must send proxy URLs to POST /proxy-targets.
+2. The main project must update monitoring cadence, request timeout, and failure threshold through PATCH /config.
+3. The monitoring service must keep probing in the background without waiting for user requests.
+4. Each proxy must be tracked as pending, up, or down from real HTTP probes only.
+5. Pool failure rate must be computed as down / total.
+6. One pool alert must open when failureRate >= threshold and resolve when failureRate < threshold.
+7. The same canonical monitoring state must back /state, /webhooks payloads, Slack messages, and Discord messages.
+8. Webhook delivery must retry transient receiver failures.
+9. Slack messages must use attachments, hex colors, and Unix epoch timestamps.
+10. Discord messages must use embeds and integer colors.
+
+Pairing steps
+1. Start this service as its own Bun process.
+2. Register Slack/Discord webhooks through POST /integrations.
+3. Register proxy URLs through POST /proxy-targets.
+4. Set cadence, timeout, and threshold through PATCH /config.
+5. Read the live canonical state from GET /state.
+6. Consume alert.fired and alert.resolved events delivered to your receivers.
+
+Commands to run and check
+1. Install dependencies:
+	C:\Users\VICTUS\.bun\bin\bun.exe install
+2. Push the SQLite schema:
+	C:\Users\VICTUS\.bun\bin\bun.exe run db:push
+3. Start the service:
+	C:\Users\VICTUS\.bun\bin\bun.exe run dev
+4. Check health:
+	Invoke-RestMethod http://localhost:3000/health
+5. Check docs:
+	curl.exe -s -o NUL -w "%{http_code}" http://localhost:3000/swagger
+6. Check canonical monitoring state:
+	Invoke-RestMethod http://localhost:3000/state
+7. Register a proxy target:
+	Invoke-RestMethod -Method Post -Uri http://localhost:3000/proxy-targets -ContentType "application/json" -Body '{"name":"Example","url":"https://example.com","expectedStatus":200}'
+8. Update runtime config immediately:
+	Invoke-RestMethod -Method Patch -Uri http://localhost:3000/config -ContentType "application/json" -Body '{"cadenceMs":5000,"requestTimeoutMs":5000,"failureThreshold":0.5}'
+9. Register a receiver:
+	Invoke-RestMethod -Method Post -Uri http://localhost:3000/integrations -ContentType "application/json" -Body '{"name":"Slack Ops","kind":"slack","webhookUrl":"https://hooks.slack.com/services/XXX/YYY/ZZZ"}'
+10. Send an alert event:
+	 Invoke-RestMethod -Method Post -Uri http://localhost:3000/webhooks -ContentType "application/json" -Body '{"integrationId":"<id>","eventType":"alert.fired","alert":{"alertId":"A-1","title":"Proxy pool down","description":"Failure rate crossed threshold","severity":"critical","source":"Proxy Maze"}}'
