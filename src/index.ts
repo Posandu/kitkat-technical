@@ -8,8 +8,10 @@ import { integrationsRoutes } from "./routes/integrations";
 import { metricsRoutes } from "./routes/metrics";
 import swagger from "@elysiajs/swagger";
 import { startMonitor } from "./scheduler";
+import { resumePendingDeliveries } from "./delivery";
 
 await loadConfig();
+await resumePendingDeliveries();
 
 startMonitor();
 

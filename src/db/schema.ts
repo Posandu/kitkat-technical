@@ -1,4 +1,4 @@
-import { sqliteTable, text, int, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, int, real, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const config = sqliteTable("config", {
 	id: int("id").primaryKey({ autoIncrement: true }),
@@ -42,10 +42,21 @@ export const webhooks = sqliteTable("webhooks", {
 	events: text("events"),
 });
 
-export const webhookDeliveries = sqliteTable("webhook_deliveries", {
-	id: int("id").primaryKey({ autoIncrement: true }),
-	webhookId: text("webhook_id").notNull(),
-	alertId: text("alert_id").notNull(),
-	event: text("event").notNull(),
-	deliveredAt: text("delivered_at").notNull(),
-});
+export const webhookDeliveries = sqliteTable(
+	"webhook_deliveries",
+	{
+		id: int("id").primaryKey({ autoIncrement: true }),
+		webhookId: text("webhook_id").notNull(),
+		alertId: text("alert_id").notNull(),
+		event: text("event").notNull(),
+		status: text("status").notNull().default("pending"),
+		payload: text("payload").notNull(),
+		url: text("url").notNull(),
+		attempts: int("attempts").notNull().default(0),
+		createdAt: text("created_at").notNull(),
+		deliveredAt: text("delivered_at"),
+	},
+	(t) => [
+		uniqueIndex("uniq_webhook_alert_event").on(t.webhookId, t.alertId, t.event),
+	],
+);

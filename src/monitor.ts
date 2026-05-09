@@ -62,13 +62,24 @@ export async function runChecks(): Promise<void> {
 	await evaluateAlertState(checkedAt);
 }
 
-export async function evaluateAlertState(now?: string): Promise<void> {
+// Serialize alert evaluation across all triggers (scheduler tick, POST /proxies,
+// DELETE /proxies). Otherwise concurrent calls can both observe "no active
+// alert" and INSERT, producing duplicate active alerts.
+let evalChain: Promise<void> = Promise.resolve();
+
+export function evaluateAlertState(now?: string): Promise<void> {
+	const next = evalChain.then(() => evaluateAlertStateUnsafe(now));
+	evalChain = next.catch(() => undefined);
+	return next;
+}
+
+async function evaluateAlertStateUnsafe(now?: string): Promise<void> {
 	const ts = now ?? new Date().toISOString();
 	const allProxies = await db.select().from(proxiesTable);
 	const total = allProxies.length;
 
 	const downProxies = allProxies.filter((p) => p.status === "down");
-	const failedIds = downProxies.map((p) => p.id);
+	const failedIds = downProxies.map((p) => p.id).sort();
 	const failureRate = total > 0 ? downProxies.length / total : 0;
 
 	const [activeAlert] = await db

@@ -17,7 +17,10 @@ export const metricsRoutes = new Elysia({ prefix: "/metrics" }).get(
 			db.select({ current_pool_size: count() }).from(proxiesTable),
 			db.select({ active_alerts: count() }).from(alertsTable).where(eq(alertsTable.status, "active")),
 			db.select({ total_alerts: count() }).from(alertsTable),
-			db.select({ webhook_deliveries: count() }).from(webhookDeliveries),
+			db
+				.select({ webhook_deliveries: count() })
+				.from(webhookDeliveries)
+				.where(eq(webhookDeliveries.status, "delivered")),
 		]);
 
 		return {
