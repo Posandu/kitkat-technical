@@ -11,17 +11,29 @@ function extractId(rawUrl: string): string {
 	}
 }
 
-// Extracts ID from the URL
-export function extractProxyId(url: string): string {
-  
-  // Split URL by "/"
-  const parts = url.split("/");
-
-  return parts[parts.length - 1];
-}
-
 export const proxiesRoutes = new Elysia({ prefix: "/proxies" })
-	.get("/", () => ({ message: "ok" }))
+	.get("/", async () => {
+		const rows = await db.select().from(proxiesTable);
+
+		const up = rows.filter((r) => r.status === "up").length;
+		const down = rows.filter((r) => r.status === "down").length;
+		const total = rows.length;
+		const failure_rate = total > 0 ? down / total : 0;
+
+		return {
+			total,
+			up,
+			down,
+			failure_rate,
+			proxies: rows.map((r) => ({
+				id: r.id,
+				url: r.url,
+				status: r.status,
+				last_checked_at: r.lastCheckedAt,
+				consecutive_failures: r.consecutiveFailures,
+			})),
+		};
+	})
 	.post(
 		"/",
 		async ({ body, set }) => {
@@ -63,7 +75,9 @@ export const proxiesRoutes = new Elysia({ prefix: "/proxies" })
 			),
 		},
 	)
-	.delete("/", () => ({ message: "ok" }))
+	.delete("/", async ({ set }) => {
+		await db.delete(proxiesTable);
+		set.status = 204;
+	})
 	.get("/:id", ({ params }) => ({ message: "ok", id: params.id }))
 	.get("/:id/history", ({ params }) => ({ message: "ok", id: params.id }));
-
