@@ -13,6 +13,9 @@ function sleep(ms: number) {
 async function sendWithRetry(url: string, payload: object): Promise<void> {
 	const delay = 5_000;
 	let attempt = 0;
+	const body = JSON.stringify(payload);
+	console.log(`[delivery] Payload to send:`, body);
+	
 	while (true) {
 		attempt++;
 		console.log(`[delivery] Attempt ${attempt} to ${url}`);
@@ -20,20 +23,18 @@ async function sendWithRetry(url: string, payload: object): Promise<void> {
 			const res = await fetch(url, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(payload),
+				body,
 			});
 			console.log(`[delivery] Received status ${res.status} from ${url}`);
+			const responseText = await res.text();
+			console.log(`[delivery] Response body:`, responseText);
+			
 			if (res.status >= 200 && res.status < 300) {
 				console.log(`[delivery] Success on attempt ${attempt}`);
 				return;
 			}
-			if (RETRYABLE_STATUSES.has(res.status)) {
-				console.log(`[delivery] Retryable status ${res.status}, waiting ${delay}ms before retry`);
-				await sleep(delay);
-				continue;
-			}
-			console.log(`[delivery] Non-retryable status ${res.status}, giving up`);
-			return;
+			console.log(`[delivery] Non-2xx status ${res.status}, retrying in ${delay}ms`);
+			await sleep(delay);
 		} catch (err) {
 			console.log(`[delivery] Network error on attempt ${attempt}:`, err);
 			await sleep(delay);
