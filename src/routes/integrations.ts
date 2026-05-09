@@ -7,6 +7,15 @@ export const integrationsRoutes = new Elysia({ prefix: "/integrations" }).post(
 	async ({ body, set }) => {
 		const webhookId = `wh-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
 
+		// Validate Slack webhook
+		if (body.type === "slack" && !body.username) {
+			set.status = 400;
+			return {
+				error: "Slack webhooks require a username",
+				webhook_id: null,
+			};
+		}
+
 		await db.insert(webhooks).values({
 			webhookId,
 			url: body.webhook_url,

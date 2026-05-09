@@ -33,8 +33,12 @@ async function sendWithRetry(url: string, payload: object): Promise<boolean> {
 				return true;
 			}
 			
-			// Retry on ALL non-2xx - capture server warms up from 405 → 502 → 200
-			if (attempt % 100 === 0) {
+			// Log 5xx errors explicitly - they're retryable
+			if (res.status >= 500) {
+				if (attempt % 20 === 1) {
+					console.log(`[delivery] Attempt ${attempt}: ${res.status} (5xx - retrying), elapsed ${Date.now() - startTime}ms`);
+				}
+			} else if (attempt % 100 === 0) {
 				console.log(`[delivery] Attempt ${attempt}: ${res.status}, elapsed ${Date.now() - startTime}ms`);
 			}
 		} catch (err) {
@@ -245,14 +249,14 @@ async function dispatchToAll(alert: AlertRow, event: "alert.fired" | "alert.reso
 	);
 }
 
-export function dispatchAlertFired(alert: AlertRow): void {
-	dispatchToAll(alert, "alert.fired").catch((err) =>
+export async function dispatchAlertFired(alert: AlertRow): Promise<void> {
+	await dispatchToAll(alert, "alert.fired").catch((err) =>
 		console.error("[delivery] dispatchAlertFired error:", err)
 	);
 }
 
-export function dispatchAlertResolved(alert: AlertRow): void {
-	dispatchToAll(alert, "alert.resolved").catch((err) =>
+export async function dispatchAlertResolved(alert: AlertRow): Promise<void> {
+	await dispatchToAll(alert, "alert.resolved").catch((err) =>
 		console.error("[delivery] dispatchAlertResolved error:", err)
 	);
 }

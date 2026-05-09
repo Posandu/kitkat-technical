@@ -13,14 +13,23 @@ function newAlertId(): string {
 async function probeProxy(
 	url: string,
 	timeoutMs: number,
-): Promise<"up" | "down"> {
+): Promise<"up" | "down" | "timeout" | "5xx"> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 
 	try {
 		const res = await fetch(url, { signal: controller.signal });
-		return res.status >= 200 && res.status < 300 ? "up" : "down";
-	} catch {
+		if (res.status >= 200 && res.status < 300) {
+			return "up";
+		} else if (res.status >= 500) {
+			return "5xx";
+		} else {
+			return "down";
+		}
+	} catch (err) {
+		if (err instanceof DOMException && err.name === "AbortError") {
+			return "timeout";
+		}
 		return "down";
 	} finally {
 		clearTimeout(timer);
@@ -42,8 +51,8 @@ export async function runChecks(): Promise<void> {
 
 		await Promise.all(
 			results.map(async ({ proxy, status }) => {
-				const consecutiveFailures =
-					status === "down" ? proxy.consecutiveFailures + 1 : 0;
+const isDown = status !== "up";
+			const consecutiveFailures = isDown ? proxy.consecutiveFailures + 1 : 0;
 
 				await db
 					.update(proxiesTable)
@@ -95,7 +104,7 @@ export async function evaluateAlertState(now?: string): Promise<void> {
 			})
 			.returning();
 		console.log(`[monitor] Alert fired: ${inserted.alertId} (rate=${(failureRate*100).toFixed(0)}%)`);
-		dispatchAlertFired(inserted);
+		await dispatchAlertFired(inserted);
 	} else if (breached && activeAlert) {
 		await db
 			.update(alertsTable)
@@ -120,6 +129,6 @@ export async function evaluateAlertState(now?: string): Promise<void> {
 			.where(eq(alertsTable.alertId, activeAlert.alertId))
 			.returning();
 		console.log(`[monitor] Alert resolved: ${activeAlert.alertId}`);
-		dispatchAlertResolved(updated);
+		await dispatchAlertResolved(updated);
 	}
 }
