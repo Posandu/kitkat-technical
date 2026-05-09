@@ -18,7 +18,9 @@ export const proxiesRoutes = new Elysia({ prefix: "/proxies" })
 		const rows = await db.select().from(proxiesTable);
 
 		const up = rows.filter((r) => r.status === "up").length;
-		const down = rows.filter((r) => r.status === "down").length;
+		const timeout = rows.filter((r) => r.status === "timeout").length;
+		const http_5xx = rows.filter((r) => r.status === "http_5xx").length;
+		const down = rows.filter((r) => r.status !== "up").length;
 		const total = rows.length;
 		const failure_rate = total > 0 ? down / total : 0;
 
@@ -26,6 +28,8 @@ export const proxiesRoutes = new Elysia({ prefix: "/proxies" })
 			total,
 			up,
 			down,
+			timeout,
+			http_5xx,
 			failure_rate,
 			proxies: rows.map((r) => ({
 				id: r.id,
