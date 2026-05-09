@@ -5,31 +5,47 @@ import { webhooks, webhookDeliveries, alerts as alertsTable } from "./db/schema"
 type AlertRow = typeof alertsTable.$inferSelect;
 
 const RETRYABLE_STATUSES = new Set([500, 502, 503, 504]);
+const MAX_DELIVERY_ATTEMPTS = 6;
+const INITIAL_RETRY_DELAY_MS = 1000;
+const MAX_RETRY_DELAY_MS = 30_000;
 
 function sleep(ms: number) {
 	return new Promise<void>((r) => setTimeout(r, ms));
 }
 
 async function sendWithRetry(url: string, payload: object): Promise<void> {
-	let delay = 1000;
-	while (true) {
+	let delay = INITIAL_RETRY_DELAY_MS;
+	for (let attempt = 1; attempt <= MAX_DELIVERY_ATTEMPTS; attempt += 1) {
 		try {
 			const res = await fetch(url, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(payload),
 			});
+
+			if (res.ok) return;
 			if (RETRYABLE_STATUSES.has(res.status)) {
+				if (attempt === MAX_DELIVERY_ATTEMPTS) {
+					throw new Error(`Webhook delivery failed after ${attempt} attempts with status ${res.status}`);
+				}
+
 				await sleep(delay);
-				delay = Math.min(delay * 2, 30_000);
+				delay = Math.min(delay * 2, MAX_RETRY_DELAY_MS);
 				continue;
 			}
-			return;
-		} catch {
+
+			throw new Error(`Webhook delivery failed with non-retryable status ${res.status}`);
+		} catch (error) {
+			if (attempt === MAX_DELIVERY_ATTEMPTS) {
+				throw error;
+			}
+
 			await sleep(delay);
-			delay = Math.min(delay * 2, 30_000);
+			delay = Math.min(delay * 2, MAX_RETRY_DELAY_MS);
 		}
 	}
+
+	throw new Error("Webhook delivery failed after exhausting retries");
 }
 
 async function deliver(
