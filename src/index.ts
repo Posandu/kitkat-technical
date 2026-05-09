@@ -14,21 +14,36 @@ import { eq } from "drizzle-orm";
 
 await loadConfig();
 
-// Register Discord webhook
-const discordWebhookUrl = "https://discord.com/api/webhooks/1502580067061071902/QdRIzAC0AOnuCYSAcGFWR1iV7U_BT-3Y66_05S5pKVBcxMkLP3rPE-OJNdUP6sb-RNGR";
-const [existingDiscordWebhook] = await db
-	.select()
-	.from(webhooks)
-	.where(eq(webhooks.type, "discord"))
-	.limit(1);
+const discordWebhookUrl = Bun.env.DISCORD_WEBHOOK_URL;
 
-if (!existingDiscordWebhook) {
-	await db.insert(webhooks).values({
-		webhookId: `wh-discord-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`,
-		url: discordWebhookUrl,
-		type: "discord",
-	});
-	console.log("[init] Discord webhook registered");
+if (discordWebhookUrl) {
+	const [existingDiscordWebhook] = await db
+		.select()
+		.from(webhooks)
+		.where(eq(webhooks.type, "discord"))
+		.limit(1);
+
+	if (existingDiscordWebhook) {
+		await db
+			.update(webhooks)
+			.set({
+				url: discordWebhookUrl,
+				type: "discord",
+				username: null,
+				events: null,
+			})
+			.where(eq(webhooks.webhookId, existingDiscordWebhook.webhookId));
+		console.log("[init] Discord webhook updated from DISCORD_WEBHOOK_URL");
+	} else {
+		await db.insert(webhooks).values({
+			webhookId: "discord-primary",
+			url: discordWebhookUrl,
+			type: "discord",
+		});
+		console.log("[init] Discord webhook registered from DISCORD_WEBHOOK_URL");
+	}
+} else {
+	console.log("[init] DISCORD_WEBHOOK_URL not set, skipping Discord webhook seed");
 }
 
 startMonitor();
@@ -43,7 +58,7 @@ const app = new Elysia()
 	.use(webhooksRoutes)
 	.use(integrationsRoutes)
 	.use(metricsRoutes)
-	.listen({ port: 6969, hostname: "139.59.123.183" });
+	.listen({ port: 6969, hostname: "0.0.0.0" });
 
 console.log(
 	`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`,

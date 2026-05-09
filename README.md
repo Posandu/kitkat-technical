@@ -36,6 +36,15 @@ bun run src/index.ts
 
 The server listens on **http://localhost:3000** by default.
 
+### Persistent Discord webhook
+
+Set `DISCORD_WEBHOOK_URL` before starting the app so the Discord integration is seeded on startup and kept in SQLite across restarts.
+
+```bash
+export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
+bun run src/index.ts
+```
+
 ## API Reference
 
 Interactive Swagger UI is available at:
