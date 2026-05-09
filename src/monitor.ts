@@ -1,134 +1,125 @@
-import { eq } from "drizzle-orm";
-import { db } from "./db";
-import { proxies as proxiesTable, proxyHistory, alerts as alertsTable } from "./db/schema";
-import { getConfig } from "./routes/config";
-import { dispatchAlertFired, dispatchAlertResolved } from "./delivery";
+import { buildSnapshotFromCounts, evaluateAlerts } from "./alerts";
+import {
+	type ProbeResult,
+	listProxies,
+	recordProbeResult,
+	summarizePool,
+} from "./proxies";
+import { getConfig } from "./state";
 
-const THRESHOLD = 0.2;
+let running = false;
+let stopped = false;
+let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+let inflight: Promise<void> | null = null;
 
-function newAlertId(): string {
-	return `alert-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
-}
-
-async function probeProxy(
+async function probeOne(
+	id: string,
 	url: string,
 	timeoutMs: number,
-): Promise<"up" | "down"> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+): Promise<ProbeResult> {
+	const started = performance.now();
 	try {
-		const res = await fetch(url, { signal: controller.signal });
-		return res.status >= 200 && res.status < 300 ? "up" : "down";
-	} catch {
-		return "down";
+		const res = await fetch(url, {
+			method: "GET",
+			signal: AbortSignal.timeout(timeoutMs),
+			redirect: "manual",
+		});
+		const latency = Math.round(performance.now() - started);
+		const status = res.status;
+		// Drain body so the connection can be reused / released.
+		try {
+			await res.arrayBuffer();
+		} catch {
+			// ignore body read errors; status is what matters
+		}
+		const isUp = status >= 200 && status < 300;
+		return {
+			id,
+			status: isUp ? "up" : "down",
+			http_status: status,
+			latency_ms: latency,
+			error: isUp ? null : `non_2xx_${status}`,
+		};
+	} catch (err) {
+		const latency = Math.round(performance.now() - started);
+		const reason = err instanceof Error ? err.name : "error";
+		const message = err instanceof Error ? err.message : String(err);
+		return {
+			id,
+			status: "down",
+			http_status: null,
+			latency_ms: latency,
+			error: `${reason}: ${message}`.slice(0, 500),
+		};
+	}
+}
+
+async function runSweep(): Promise<void> {
+	const targets = listProxies();
+	if (targets.length === 0) {
+		// Still evaluate alerts so we resolve any active alert when the pool is empty.
+		evaluateAlerts(buildSnapshotFromCounts(0, []));
+		return;
+	}
+	const cfg = getConfig();
+	const timeoutMs = Math.max(1, cfg.request_timeout_ms);
+	const results = await Promise.all(
+		targets.map((t) => probeOne(t.id, t.url, timeoutMs)),
+	);
+	for (const r of results) recordProbeResult(r);
+	const summary = summarizePool();
+	evaluateAlerts(
+		buildSnapshotFromCounts(summary.total, summary.failed_ids),
+	);
+}
+
+function scheduleNext(): void {
+	if (stopped) return;
+	const cfg = getConfig();
+	const delayMs = Math.max(1000, cfg.check_interval_seconds * 1000);
+	pendingTimer = setTimeout(() => {
+		void tick();
+	}, delayMs);
+}
+
+async function tick(): Promise<void> {
+	if (stopped || running) return;
+	running = true;
+	inflight = runSweep().catch((err) => {
+		console.error("[monitor] sweep failed:", err);
+	});
+	try {
+		await inflight;
 	} finally {
-		clearTimeout(timer);
+		inflight = null;
+		running = false;
+		scheduleNext();
 	}
 }
 
-export async function runChecks(): Promise<void> {
-	const { requestTimeoutMs } = getConfig();
-	const rows = await db.select().from(proxiesTable);
-	const checkedAt = new Date().toISOString();
-
-	if (rows.length > 0) {
-		const results = await Promise.all(
-			rows.map(async (proxy) => {
-				const status = await probeProxy(proxy.url, requestTimeoutMs);
-				return { proxy, status };
-			}),
-		);
-
-		await Promise.all(
-			results.map(async ({ proxy, status }) => {
-				const consecutiveFailures =
-					status === "down" ? proxy.consecutiveFailures + 1 : 0;
-
-				await db
-					.update(proxiesTable)
-					.set({ status, lastCheckedAt: checkedAt, consecutiveFailures })
-					.where(eq(proxiesTable.id, proxy.id));
-
-				await db.insert(proxyHistory).values({
-					proxyId: proxy.id,
-					status,
-					checkedAt,
-				});
-			}),
-		);
-	}
-
-	await evaluateAlertState(checkedAt);
+export function startMonitor(): void {
+	if (pendingTimer || running) return;
+	stopped = false;
+	// Run the first sweep promptly so newly-added proxies don't sit in `pending`
+	// for an entire interval before producing data.
+	pendingTimer = setTimeout(() => {
+		void tick();
+	}, 50);
 }
 
-// Serialize alert evaluation across all triggers (scheduler tick, POST /proxies,
-// DELETE /proxies). Otherwise concurrent calls can both observe "no active
-// alert" and INSERT, producing duplicate active alerts.
-let evalChain: Promise<void> = Promise.resolve();
-
-export function evaluateAlertState(now?: string): Promise<void> {
-	const next = evalChain.then(() => evaluateAlertStateUnsafe(now));
-	evalChain = next.catch(() => undefined);
-	return next;
+export function stopMonitor(): void {
+	stopped = true;
+	if (pendingTimer) {
+		clearTimeout(pendingTimer);
+		pendingTimer = null;
+	}
 }
 
-async function evaluateAlertStateUnsafe(now?: string): Promise<void> {
-	const ts = now ?? new Date().toISOString();
-	const allProxies = await db.select().from(proxiesTable);
-	const total = allProxies.length;
-
-	const downProxies = allProxies.filter((p) => p.status === "down");
-	const failedIds = downProxies.map((p) => p.id).sort();
-	const failureRate = total > 0 ? downProxies.length / total : 0;
-
-	const [activeAlert] = await db
-		.select()
-		.from(alertsTable)
-		.where(eq(alertsTable.status, "active"))
-		.limit(1);
-
-	const breached = total > 0 && failureRate >= THRESHOLD;
-
-	if (breached && !activeAlert) {
-		const [inserted] = await db
-			.insert(alertsTable)
-			.values({
-				alertId: newAlertId(),
-				status: "active",
-				failureRate,
-				totalProxies: total,
-				failedProxies: downProxies.length,
-				failedProxyIds: JSON.stringify(failedIds),
-				threshold: THRESHOLD,
-				firedAt: ts,
-				message: "Proxy pool failure rate exceeded threshold",
-			})
-			.returning();
-		dispatchAlertFired(inserted);
-	} else if (breached && activeAlert) {
-		await db
-			.update(alertsTable)
-			.set({
-				failureRate,
-				totalProxies: total,
-				failedProxies: downProxies.length,
-				failedProxyIds: JSON.stringify(failedIds),
-			})
-			.where(eq(alertsTable.alertId, activeAlert.alertId));
-	} else if (!breached && activeAlert) {
-		const [updated] = await db
-			.update(alertsTable)
-			.set({
-				status: "resolved",
-				resolvedAt: ts,
-				failureRate,
-				totalProxies: total,
-				failedProxies: downProxies.length,
-				failedProxyIds: JSON.stringify(failedIds),
-			})
-			.where(eq(alertsTable.alertId, activeAlert.alertId))
-			.returning();
-		dispatchAlertResolved(updated);
+/** Force an immediate sweep. Exposed for testability; not wired to any route. */
+export async function runOneSweepNow(): Promise<void> {
+	if (running && inflight) {
+		await inflight;
+		return;
 	}
+	await tick();
 }

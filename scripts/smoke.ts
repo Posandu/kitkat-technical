@@ -1,50 +1,80 @@
-// Quick smoke test: spins up a webhook receiver that fails 3x with 503 then
-// 200, registers it, registers Slack and Discord integrations, posts proxies
-// pointing at unreachable URLs, and prints what each endpoint received.
+/**
+ * End-to-end smoke test.
+ *
+ * Spins up two local "fake target" servers (one healthy, one always-503), plus
+ * a webhook receiver that fails the first three deliveries with 503 then 200,
+ * and a Slack/Discord receiver. Then drives the Proxy Maze HTTP API through a
+ * full breach -> recover -> re-breach lifecycle and prints assertions.
+ */
 
 const BASE = "http://localhost:6969";
 
 type Hit = {
 	at: number;
-	method: string;
-	path: string;
 	status: number;
-	body: string;
+	body: unknown;
 };
-const hits: Hit[] = [];
+
+let healthyHits = 0;
+let downHits = 0;
 
 let standardCalls = 0;
+const standardHits: Hit[] = [];
 const slackHits: Hit[] = [];
 const discordHits: Hit[] = [];
 
-const receiver = Bun.serve({
-	port: 7070,
+const targetServer = Bun.serve({
+	port: 7170,
 	async fetch(req) {
 		const url = new URL(req.url);
-		const body = await req.text();
-		const at = Date.now();
+		if (url.pathname.startsWith("/proxy/healthy/")) {
+			healthyHits++;
+			return new Response("ok", { status: 200 });
+		}
+		if (url.pathname.startsWith("/proxy/down/")) {
+			downHits++;
+			return new Response("server error", { status: 503 });
+		}
+		return new Response("not found", { status: 404 });
+	},
+});
 
+const receiverServer = Bun.serve({
+	port: 7171,
+	async fetch(req) {
+		const url = new URL(req.url);
+		const at = Date.now();
+		const text = await req.text();
+		let parsed: unknown = text;
+		try {
+			parsed = JSON.parse(text);
+		} catch {}
 		if (url.pathname === "/webhook") {
 			standardCalls++;
 			const status = standardCalls <= 3 ? 503 : 200;
-			hits.push({ at, method: req.method, path: url.pathname, status, body });
+			standardHits.push({ at, status, body: parsed });
 			return new Response("", { status });
 		}
 		if (url.pathname === "/slack") {
-			slackHits.push({ at, method: req.method, path: url.pathname, status: 200, body });
+			slackHits.push({ at, status: 200, body: parsed });
 			return new Response("", { status: 200 });
 		}
 		if (url.pathname === "/discord") {
-			discordHits.push({ at, method: req.method, path: url.pathname, status: 200, body });
+			discordHits.push({ at, status: 200, body: parsed });
 			return new Response("", { status: 200 });
 		}
 		return new Response("not found", { status: 404 });
 	},
 });
 
-console.log(`receiver listening on ${receiver.port}`);
+console.log(`[smoke] target server on :${targetServer.port}`);
+console.log(`[smoke] receiver server on :${receiverServer.port}`);
 
-async function api(method: string, path: string, body?: unknown) {
+async function api<T = unknown>(
+	method: string,
+	path: string,
+	body?: unknown,
+): Promise<{ status: number; body: T }> {
 	const res = await fetch(`${BASE}${path}`, {
 		method,
 		headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -55,100 +85,196 @@ async function api(method: string, path: string, body?: unknown) {
 	try {
 		parsed = JSON.parse(text);
 	} catch {}
-	return { status: res.status, body: parsed };
+	return { status: res.status, body: parsed as T };
 }
 
-async function sleep(ms: number) {
+function sleep(ms: number) {
 	return new Promise<void>((r) => setTimeout(r, ms));
 }
 
-async function main() {
-	console.log("\n[1] tighten cadence");
-	console.log(
-		await api("POST", "/config", {
-			check_interval_seconds: 1,
-			request_timeout_ms: 500,
-		}),
-	);
-
-	console.log("\n[2] register webhook (will return 503x3 then 200)");
-	console.log(
-		await api("POST", "/webhooks", {
-			url: "http://localhost:7070/webhook",
-		}),
-	);
-
-	console.log("\n[3] register Slack integration");
-	console.log(
-		await api("POST", "/integrations", {
-			type: "slack",
-			webhook_url: "http://localhost:7070/slack",
-			username: "ProxyMaze",
-			events: ["alert.fired", "alert.resolved"],
-		}),
-	);
-
-	console.log("\n[4] register Discord integration");
-	console.log(
-		await api("POST", "/integrations", {
-			type: "discord",
-			webhook_url: "http://localhost:7070/discord",
-			username: "ProxyMaze",
-			events: ["alert.fired", "alert.resolved"],
-		}),
-	);
-
-	console.log("\n[5] post 10 unreachable proxies (replace=true)");
-	const proxies = Array.from({ length: 10 }, (_, i) => `http://127.0.0.1:1/proxy/px-${i + 1}`);
-	console.log(await api("POST", "/proxies", { proxies, replace: true }));
-
-	console.log("\n[6] wait 4s for probes + alert fire + retries");
-	await sleep(4000);
-
-	console.log("\n[7] state check");
-	console.log("GET /proxies:", await api("GET", "/proxies"));
-	console.log("GET /alerts:", await api("GET", "/alerts"));
-	console.log("GET /metrics:", await api("GET", "/metrics"));
-
-	console.log("\n[8] standard receiver hits:");
-	for (const h of hits) {
-		const t = ((h.at - hits[0].at) / 1000).toFixed(2);
-		console.log(`  +${t}s -> ${h.status} body[0..120]=${h.body.slice(0, 120)}`);
-	}
-
-	console.log("\n[9] slack receiver hits:");
-	for (const h of slackHits) {
-		console.log(`  body=${h.body.slice(0, 400)}`);
-	}
-
-	console.log("\n[10] discord receiver hits:");
-	for (const h of discordHits) {
-		console.log(`  body=${h.body.slice(0, 400)}`);
-	}
-
-	console.log("\n[11] now make proxies recover (replace with example.com)");
-	const goodProxies = Array.from(
-		{ length: 10 },
-		(_, i) => `http://example.com/proxy/px-good-${i + 1}`,
-	);
-	console.log(await api("POST", "/proxies", { proxies: goodProxies, replace: true }));
-
-	await sleep(5000);
-
-	console.log("\n[12] state after recovery");
-	console.log("GET /alerts:", await api("GET", "/alerts"));
-	console.log("GET /metrics:", await api("GET", "/metrics"));
-
-	console.log("\n[13] receiver hits (after recovery):");
-	console.log("standard total:", hits.length);
-	console.log("slack total:", slackHits.length);
-	console.log("discord total:", discordHits.length);
-
-	receiver.stop();
+function header(label: string) {
+	console.log(`\n=== ${label} ===`);
 }
 
-main().catch((err) => {
-	console.error(err);
-	receiver.stop();
-	process.exit(1);
-});
+async function waitFor<T>(
+	label: string,
+	predicate: () => Promise<{ ok: boolean; value: T }>,
+	timeoutMs = 30_000,
+): Promise<T> {
+	const start = Date.now();
+	let last: T | undefined;
+	while (Date.now() - start < timeoutMs) {
+		const r = await predicate();
+		last = r.value;
+		if (r.ok) {
+			console.log(`[smoke] ${label} ok in ${Date.now() - start}ms`);
+			return r.value;
+		}
+		await sleep(250);
+	}
+	throw new Error(`timed out waiting for ${label}; last=${JSON.stringify(last)}`);
+}
+
+async function main() {
+	header("config: tighten cadence");
+	const cfg1 = await api("POST", "/config", {
+		check_interval_seconds: 1,
+		request_timeout_ms: 1500,
+		ignored_field: "should be permitted",
+	});
+	console.log("POST /config", cfg1.status, cfg1.body);
+
+	const cfg2 = await api("GET", "/config");
+	console.log("GET /config", cfg2.status, cfg2.body);
+
+	header("webhooks: register generic + slack + discord");
+	const wh1 = await api<{ webhook_id: string }>("POST", "/webhooks", {
+		url: "http://localhost:7171/webhook",
+	});
+	console.log("POST /webhooks (generic)", wh1.status, wh1.body);
+
+	const wh2 = await api<{ webhook_id: string }>("POST", "/webhooks", {
+		url: "http://localhost:7171/slack",
+		type: "slack",
+		username: "Watchtower",
+	});
+	console.log("POST /webhooks (slack)", wh2.status, wh2.body);
+
+	const wh3 = await api<{ webhook_id: string }>("POST", "/webhooks", {
+		url: "http://localhost:7171/discord",
+		type: "discord",
+	});
+	console.log("POST /webhooks (discord)", wh3.status, wh3.body);
+
+	header("proxies: load 5 targets, 4 healthy + 1 down (rate 0.20)");
+	const load1 = await api("POST", "/proxies", {
+		replace: true,
+		proxies: [
+			"http://localhost:7170/proxy/healthy/px-1",
+			"http://localhost:7170/proxy/healthy/px-2",
+			"http://localhost:7170/proxy/healthy/px-3",
+			"http://localhost:7170/proxy/healthy/px-4",
+			"http://localhost:7170/proxy/down/px-99",
+		],
+	});
+	console.log("POST /proxies", load1.status, load1.body);
+
+	header("waiting for first sweep + breach detection");
+	await waitFor("breach + at least one alert active", async () => {
+		const list = await api<{ active: { alert_id: string } | null }>(
+			"GET",
+			"/alerts",
+		);
+		return { ok: list.body.active !== null, value: list.body };
+	});
+
+	const proxiesView = await api("GET", "/proxies");
+	console.log("GET /proxies", proxiesView.status, proxiesView.body);
+
+	header("waiting for generic webhook to be delivered (after 3x 503 retries)");
+	await waitFor(
+		"generic delivered post-retry",
+		async () => ({ ok: standardCalls >= 4, value: { standardCalls } }),
+		20_000,
+	);
+	console.log(`[smoke] generic calls so far: ${standardCalls}`);
+	console.log(`[smoke] slack calls: ${slackHits.length}`);
+	console.log(`[smoke] discord calls: ${discordHits.length}`);
+
+	header("recovery: switch all to healthy");
+	const load2 = await api("POST", "/proxies", {
+		replace: true,
+		proxies: [
+			"http://localhost:7170/proxy/healthy/px-1",
+			"http://localhost:7170/proxy/healthy/px-2",
+			"http://localhost:7170/proxy/healthy/px-3",
+		],
+	});
+	console.log("POST /proxies (replace)", load2.status, load2.body);
+
+	await waitFor("alert resolved", async () => {
+		const list = await api<{
+			active: { alert_id: string } | null;
+			alerts: Array<{ status: string }>;
+		}>("GET", "/alerts");
+		return { ok: list.body.active === null, value: list.body };
+	});
+
+	header("re-breach: introduce another all-down proxy");
+	const load3 = await api("POST", "/proxies", {
+		replace: true,
+		proxies: [
+			"http://localhost:7170/proxy/down/px-9001",
+			"http://localhost:7170/proxy/healthy/px-1",
+		],
+	});
+	console.log("POST /proxies (replace)", load3.status, load3.body);
+
+	const newAlert = await waitFor<{ active: { alert_id: string } | null }>(
+		"new alert minted with fresh id",
+		async () => {
+			const list = await api<{ active: { alert_id: string } | null }>(
+				"GET",
+				"/alerts",
+			);
+			return { ok: list.body.active !== null, value: list.body };
+		},
+	);
+
+	header("metrics");
+	const metrics = await api("GET", "/metrics");
+	console.log("GET /metrics", metrics.status, metrics.body);
+
+	header("history check");
+	const hist = await api<unknown[]>("GET", "/proxies/px-1/history");
+	console.log(
+		`GET /proxies/px-1/history -> ${hist.status} entries=${(hist.body as unknown[]).length}`,
+	);
+
+	header("404 for unknown proxy");
+	const unknown = await api("GET", "/proxies/does-not-exist");
+	console.log("GET /proxies/does-not-exist", unknown.status, unknown.body);
+
+	header("delivery summary");
+	console.log(`standard webhook calls: ${standardCalls} (expect >= 4)`);
+	console.log(`slack calls: ${slackHits.length}`);
+	console.log(`discord calls: ${discordHits.length}`);
+	if (slackHits[0]) {
+		const first = slackHits[0].body as {
+			username?: string;
+			text?: string;
+			attachments?: Array<{ color?: string; ts?: number }>;
+		};
+		console.log("slack sample:", {
+			username: first.username,
+			text: first.text,
+			attachment_color: first.attachments?.[0]?.color,
+			attachment_ts: first.attachments?.[0]?.ts,
+		});
+	}
+	if (discordHits[0]) {
+		const first = discordHits[0].body as {
+			embeds?: Array<{ title?: string; color?: number }>;
+		};
+		console.log("discord sample:", {
+			embed_title: first.embeds?.[0]?.title,
+			embed_color: first.embeds?.[0]?.color,
+		});
+	}
+
+	console.log(
+		`final active alert id: ${newAlert.active?.alert_id ?? "<none>"}`,
+	);
+
+	console.log("\n[smoke] healthy hits:", healthyHits, "down hits:", downHits);
+}
+
+main()
+	.catch((e) => {
+		console.error("[smoke] FAILED", e);
+		process.exitCode = 1;
+	})
+	.finally(() => {
+		targetServer.stop(true);
+		receiverServer.stop(true);
+	});

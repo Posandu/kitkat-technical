@@ -1,23 +1,37 @@
-import Elysia from "elysia";
-import { db } from "../db";
-import { alerts as alertsTable } from "../db/schema";
+import { Elysia } from "elysia";
+import { getActiveAlert, listAlerts } from "../alerts";
 
-export const alertsRoutes = new Elysia({ prefix: "/alerts" }).get(
-	"/",
-	async () => {
-		const rows = await db.select().from(alertsTable);
+function serializeAlert(a: ReturnType<typeof getActiveAlert>) {
+	if (!a) return null;
+	return {
+		alert_id: a.alert_id,
+		status: a.status,
+		failure_rate: a.failure_rate,
+		threshold: a.threshold,
+		total_proxies: a.total_proxies,
+		failed_proxies: a.failed_proxies,
+		failed_proxy_ids: a.failed_proxy_ids,
+		fired_at: a.fired_at,
+		resolved_at: a.resolved_at,
+		message: a.message,
+	};
+}
 
-		return rows.map((r) => ({
-			alert_id: r.alertId,
-			status: r.status,
-			failure_rate: r.failureRate,
-			total_proxies: r.totalProxies,
-			failed_proxies: r.failedProxies,
-			failed_proxy_ids: JSON.parse(r.failedProxyIds),
-			threshold: r.threshold,
-			fired_at: r.firedAt,
-			resolved_at: r.resolvedAt,
-			message: r.message,
-		}));
-	},
-);
+export const alertsRoutes = new Elysia()
+	.get("/alerts", () => {
+		const all = listAlerts();
+		const active = all.find((a) => a.status === "active") ?? null;
+		return {
+			active: serializeAlert(active),
+			total: all.length,
+			alerts: all.map(serializeAlert),
+		};
+	})
+	.get("/alerts/active", ({ set }) => {
+		const a = getActiveAlert();
+		if (!a) {
+			set.status = 404;
+			return { error: "no_active_alert" };
+		}
+		return serializeAlert(a);
+	});

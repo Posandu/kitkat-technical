@@ -1,82 +1,32 @@
-import Elysia, { t } from "elysia";
-import { eq } from "drizzle-orm";
-import { db } from "../db";
-import { config as configTable } from "../db/schema";
+import { Elysia } from "elysia";
+import { getConfig, setConfig } from "../state";
 
-type ConfigChangeListener = () => void;
-const listeners = new Set<ConfigChangeListener>();
-
-export function onConfigChange(fn: ConfigChangeListener): void {
-	listeners.add(fn);
-}
-
-type Config = {
-	checkIntervalSeconds: number;
-	requestTimeoutMs: number;
-};
-
-const DEFAULT_CONFIG: Config = {
-	checkIntervalSeconds: 15,
-	requestTimeoutMs: 3000,
-};
-
-let configStore: Config = { ...DEFAULT_CONFIG };
-let configRowId: number;
-
-export function getConfig(): Readonly<Config> {
-	return configStore;
-}
-
-export async function loadConfig() {
-	const [row] = await db.select().from(configTable).limit(1);
-
-	if (!row) {
-		const [inserted] = await db
-			.insert(configTable)
-			.values(DEFAULT_CONFIG)
-			.returning();
-		configRowId = inserted.id;
-	} else {
-		configRowId = row.id;
-		const { checkIntervalSeconds, requestTimeoutMs } = row;
-		configStore = { checkIntervalSeconds, requestTimeoutMs };
-	}
-}
-
-function toSnake(c: Config) {
-	return {
-		check_interval_seconds: c.checkIntervalSeconds,
-		request_timeout_ms: c.requestTimeoutMs,
-	};
-}
-
-export const configRoutes = new Elysia({ prefix: "/config" })
-	.get("/", () => toSnake(configStore))
-	.post(
-		"/",
-		async ({ body }) => {
-			configStore.checkIntervalSeconds = body.check_interval_seconds;
-			configStore.requestTimeoutMs = body.request_timeout_ms;
-			await db
-				.update(configTable)
-				.set(configStore)
-				.where(eq(configTable.id, configRowId));
-			for (const fn of listeners) {
-				try {
-					fn();
-				} catch (err) {
-					console.error("[config] listener error:", err);
-				}
-			}
-			return toSnake(configStore);
-		},
-		{
-			body: t.Object(
-				{
-					check_interval_seconds: t.Number(),
-					request_timeout_ms: t.Number(),
-				},
-				{ additionalProperties: true },
-			),
-		},
-	);
+export const configRoutes = new Elysia()
+	.get("/config", () => getConfig())
+	.post("/config", ({ body, set }) => {
+		if (!body || typeof body !== "object") {
+			set.status = 400;
+			return { error: "invalid_body", message: "expected JSON object" };
+		}
+		const b = body as Record<string, unknown>;
+		const interval = b.check_interval_seconds;
+		const timeout = b.request_timeout_ms;
+		if (typeof interval !== "number" || !Number.isFinite(interval) || interval < 1) {
+			set.status = 400;
+			return {
+				error: "invalid_check_interval_seconds",
+				message: "must be a positive integer (>= 1)",
+			};
+		}
+		if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout < 1) {
+			set.status = 400;
+			return {
+				error: "invalid_request_timeout_ms",
+				message: "must be a positive integer (>= 1)",
+			};
+		}
+		return setConfig({
+			check_interval_seconds: Math.floor(interval),
+			request_timeout_ms: Math.floor(timeout),
+		});
+	});

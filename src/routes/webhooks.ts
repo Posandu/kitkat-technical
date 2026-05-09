@@ -1,22 +1,32 @@
-import Elysia, { t } from "elysia";
-import { db } from "../db";
-import { webhooks } from "../db/schema";
+import { Elysia } from "elysia";
+import { listWebhooks, registerWebhook, type WebhookType } from "../webhooks";
 
-export const webhooksRoutes = new Elysia({ prefix: "/webhooks" }).post(
-	"/",
-	async ({ body, set }) => {
-		const webhookId = `wh-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+function isWebhookType(v: unknown): v is WebhookType {
+	return v === "generic" || v === "slack" || v === "discord";
+}
 
-		await db.insert(webhooks).values({
-			webhookId,
-			url: body.url,
-			type: "standard",
-		});
-
+export const webhooksRoutes = new Elysia()
+	.post("/webhooks", ({ body, set }) => {
+		if (!body || typeof body !== "object") {
+			set.status = 400;
+			return { error: "invalid_body", message: "expected JSON object" };
+		}
+		const b = body as Record<string, unknown>;
+		const url = b.url;
+		if (typeof url !== "string" || url.length === 0) {
+			set.status = 400;
+			return { error: "invalid_url", message: "`url` is required" };
+		}
+		try {
+			new URL(url);
+		} catch {
+			set.status = 400;
+			return { error: "invalid_url", message: "`url` must be a valid URL" };
+		}
+		const type: WebhookType = isWebhookType(b.type) ? b.type : "generic";
+		const username = typeof b.username === "string" ? b.username : null;
+		const wh = registerWebhook({ url, type, username });
 		set.status = 201;
-		return { webhook_id: webhookId, url: body.url };
-	},
-	{
-		body: t.Object({ url: t.String() }, { additionalProperties: true }),
-	},
-);
+		return wh;
+	})
+	.get("/webhooks", () => listWebhooks());
