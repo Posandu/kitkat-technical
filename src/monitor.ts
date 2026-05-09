@@ -76,7 +76,7 @@ export async function evaluateAlertState(now?: string): Promise<void> {
 	const allProxies = await db.select().from(proxiesTable);
 	const total = allProxies.length;
 
-	const downProxies = allProxies.filter((p) => p.status === "down");
+	const downProxies = allProxies.filter((p) => p.status !== "up");
 	const failedIds = downProxies.map((p) => p.id);
 	const failureRate = total > 0 ? downProxies.length / total : 0;
 
