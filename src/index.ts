@@ -24,8 +24,9 @@ function scheduleNextCheck() {
 	}, checkIntervalSeconds * 1000);
 }
 
-runChecks().catch((err) => console.error("[monitor] initial check failed:", err));
-scheduleNextCheck();
+runChecks()
+	.catch((err) => console.error("[monitor] initial check failed:", err))
+	.finally(() => scheduleNextCheck());
 
 const app = new Elysia()
 	.use(swagger())
