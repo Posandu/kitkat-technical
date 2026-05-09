@@ -1,12 +1,14 @@
 import { Elysia } from "elysia";
 import { healthRoutes } from "./routes/health";
-import { configRoutes } from "./routes/config";
+import { configRoutes, loadConfig } from "./routes/config";
 import { proxiesRoutes } from "./routes/proxies";
 import { alertsRoutes } from "./routes/alerts";
 import { webhooksRoutes } from "./routes/webhooks";
 import { integrationsRoutes } from "./routes/integrations";
 import { metricsRoutes } from "./routes/metrics";
 import swagger from "@elysiajs/swagger";
+
+await loadConfig();
 
 const app = new Elysia()
 	.use(swagger())
