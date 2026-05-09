@@ -10,7 +10,7 @@ function sleep(ms: number) {
 	return new Promise<void>((r) => setTimeout(r, ms));
 }
 
-async function sendWithRetry(url: string, payload: object): Promise<void> {
+async function sendWithRetry(url: string, payload: object): Promise<boolean> {
 	let attempt = 0;
 	const body = JSON.stringify(payload);
 	
@@ -25,18 +25,16 @@ async function sendWithRetry(url: string, payload: object): Promise<void> {
 			
 			if (res.status >= 200 && res.status < 300) {
 				console.log(`[delivery] ✓ Delivered after ${attempt} attempt(s)`);
-				return;
+				return true;
 			}
 			
-			if (RETRYABLE_STATUSES.has(res.status)) {
-				console.log(`[delivery] Attempt ${attempt}: ${res.status}, retrying immediately...`);
-				continue;
+			if (attempt % 50 === 0) {
+				console.log(`[delivery] Attempt ${attempt}: ${res.status}, still retrying...`);
 			}
-			
-			console.log(`[delivery] Non-retryable ${res.status}, stopping`);
-			return;
 		} catch (err) {
-			console.log(`[delivery] Attempt ${attempt}: network error, retrying immediately...`);
+			if (attempt % 50 === 0) {
+				console.log(`[delivery] Attempt ${attempt}: network error, still retrying...`);
+			}
 		}
 	}
 }
@@ -65,14 +63,18 @@ async function deliver(
 		return;
 	}
 
-	await sendWithRetry(url, payload);
-
-	await db.insert(webhookDeliveries).values({
-		webhookId,
-		alertId,
-		event,
-		deliveredAt: new Date().toISOString(),
-	});
+	const success = await sendWithRetry(url, payload);
+	
+	if (success) {
+		await db.insert(webhookDeliveries).values({
+			webhookId,
+			alertId,
+			event,
+			deliveredAt: new Date().toISOString(),
+		});
+	} else {
+		console.log(`[delivery] Failed permanently, not recording: ${webhookId}/${event}`);
+	}
 }
 
 // ── Payload builders ────────────────────────────────────────────────────────
