@@ -12,22 +12,30 @@ function sleep(ms: number) {
 
 async function sendWithRetry(url: string, payload: object): Promise<void> {
 	const delay = 5_000;
+	let attempt = 0;
 	while (true) {
+		attempt++;
+		console.log(`[delivery] Attempt ${attempt} to ${url}`);
 		try {
 			const res = await fetch(url, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(payload),
 			});
+			console.log(`[delivery] Received status ${res.status} from ${url}`);
 			if (res.status >= 200 && res.status < 300) {
+				console.log(`[delivery] Success on attempt ${attempt}`);
 				return;
 			}
 			if (RETRYABLE_STATUSES.has(res.status)) {
+				console.log(`[delivery] Retryable status ${res.status}, waiting ${delay}ms before retry`);
 				await sleep(delay);
 				continue;
 			}
+			console.log(`[delivery] Non-retryable status ${res.status}, giving up`);
 			return;
-		} catch {
+		} catch (err) {
+			console.log(`[delivery] Network error on attempt ${attempt}:`, err);
 			await sleep(delay);
 		}
 	}
@@ -52,8 +60,12 @@ async function deliver(
 		)
 		.limit(1);
 
-	if (existing) return;
+	if (existing) {
+		console.log(`[delivery] Skipping duplicate delivery: webhook=${webhookId}, alert=${alertId}, event=${event}`);
+		return;
+	}
 
+	console.log(`[delivery] Sending to ${url}`);
 	await sendWithRetry(url, payload);
 
 	await db.insert(webhookDeliveries).values({
@@ -62,6 +74,7 @@ async function deliver(
 		event,
 		deliveredAt: new Date().toISOString(),
 	});
+	console.log(`[delivery] Recorded delivery: webhook=${webhookId}, alert=${alertId}, event=${event}`);
 }
 
 // ── Payload builders ────────────────────────────────────────────────────────
@@ -188,12 +201,19 @@ function discordResolved(alert: AlertRow) {
 
 async function dispatchToAll(alert: AlertRow, event: "alert.fired" | "alert.resolved") {
 	const allWebhooks = await db.select().from(webhooks);
+	console.log(`[delivery] Found ${allWebhooks.length} webhooks for event ${event}`);
 
 	await Promise.all(
 		allWebhooks.map(async (wh) => {
+			console.log(`[delivery] Processing webhook ${wh.webhookId}, type: ${wh.type}, events: ${wh.events}`);
+			
 			if (wh.type !== "standard" && wh.events) {
 				const allowed = JSON.parse(wh.events) as string[];
-				if (!allowed.includes(event)) return;
+				console.log(`[delivery] Checking event filter: allowed=${JSON.stringify(allowed)}, event=${event}`);
+				if (!allowed.includes(event)) {
+					console.log(`[delivery] Event ${event} not in allowed list, skipping webhook ${wh.webhookId}`);
+					return;
+				}
 			}
 
 			let payload: object;
@@ -208,8 +228,10 @@ async function dispatchToAll(alert: AlertRow, event: "alert.fired" | "alert.reso
 				payload = event === "alert.fired" ? standardFired(alert) : standardResolved(alert);
 			}
 
+			console.log(`[delivery] Delivering ${event} to ${wh.webhookId} at ${wh.url}`);
 			try {
 				await deliver(wh.webhookId, wh.url, alert.alertId, event, payload);
+				console.log(`[delivery] Successfully delivered ${event} to ${wh.webhookId}`);
 			} catch (err) {
 				console.error(`[delivery] ${event} → ${wh.webhookId} failed:`, err);
 			}
