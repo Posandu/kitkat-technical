@@ -2,7 +2,7 @@ import { sqliteTable, text, int, real } from "drizzle-orm/sqlite-core";
 
 export const config = sqliteTable("config", {
 	id: int("id").primaryKey({ autoIncrement: true }),
-	checkIntervalSeconds: int("check_interval_seconds").notNull().default(15),
+	checkIntervalSeconds: int("check_interval_seconds").notNull().default(2),
 	requestTimeoutMs: int("request_timeout_ms").notNull().default(3000),
 });
 

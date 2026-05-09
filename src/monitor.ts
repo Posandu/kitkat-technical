@@ -105,16 +105,6 @@ export async function evaluateAlertState(now?: string): Promise<void> {
 			.returning();
 		console.log(`[monitor] Alert fired: ${inserted.alertId} (rate=${(failureRate*100).toFixed(0)}%)`);
 		await dispatchAlertFired(inserted);
-	} else if (breached && activeAlert) {
-		await db
-			.update(alertsTable)
-			.set({
-				failureRate,
-				totalProxies: total,
-				failedProxies: downProxies.length,
-				failedProxyIds: JSON.stringify(failedIds),
-			})
-			.where(eq(alertsTable.alertId, activeAlert.alertId));
 	} else if (!breached && activeAlert) {
 		const [updated] = await db
 			.update(alertsTable)

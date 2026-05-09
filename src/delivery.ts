@@ -15,6 +15,8 @@ async function sendWithRetry(url: string, payload: object): Promise<boolean> {
 	const body = JSON.stringify(payload);
 	const startTime = Date.now();
 	const TIMEOUT_MS = 60_000; // 60 second timeout
+	let delayMs = 50; // Start with 50ms
+	const MAX_DELAY_MS = 5000; // Cap at 5 seconds
 	
 	console.log(`[delivery] Sending to ${url}`);
 	console.log(`[delivery] Payload:`, body);
@@ -47,8 +49,9 @@ async function sendWithRetry(url: string, payload: object): Promise<boolean> {
 			}
 		}
 		
-		// Small delay to avoid hammering too hard
-		await sleep(50);
+		// Exponential backoff: 50ms, 100ms, 200ms, 400ms, 800ms, up to 5 seconds
+		await sleep(delayMs);
+		delayMs = Math.min(delayMs * 2, MAX_DELAY_MS);
 	}
 	
 	console.log(`[delivery] ⚠ Timed out after ${attempt} attempts in 60s`);
