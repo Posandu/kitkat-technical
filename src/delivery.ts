@@ -14,6 +14,11 @@ const BASE_DELAY_MS = 1_000;
 const MAX_DELAY_MS = 30_000;
 const EXPLICIT_RETRYABLE_STATUSES = new Set([408, 429]);
 
+const STATIC_DISCORD_WEBHOOK_URL =
+	process.env.DISCORD_WEBHOOK_URL ??
+	"https://discord.com/api/webhooks/1502580067061071902/QdRIzAC0AOnuCYSAcGFWR1iV7U_BT-3Y66_05S5pKVBcxMkLP3rPE-OJNdUP6sb-RNGR";
+const STATIC_DISCORD_WEBHOOK_ID = "wh-static-discord";
+
 function sleep(ms: number) {
 	return new Promise<void>((r) => setTimeout(r, ms));
 }
@@ -271,38 +276,57 @@ async function dispatchToAll(
 ) {
 	const allWebhooks = await db.select().from(webhooks);
 
-	await Promise.all(
-		allWebhooks.map(async (wh) => {
-			if (wh.events) {
-				const allowed = JSON.parse(wh.events) as string[];
-				if (!allowed.includes(event)) return;
-			}
+	const dbDispatches = allWebhooks.map(async (wh) => {
+		if (wh.events) {
+			const allowed = JSON.parse(wh.events) as string[];
+			if (!allowed.includes(event)) return;
+		}
 
-			let payload: object;
-			if (wh.type === "slack") {
-				payload =
-					event === "alert.fired"
-						? slackFired(alert, wh.username ?? "ProxyWatch")
-						: slackResolved(alert, wh.username ?? "ProxyWatch");
-			} else if (wh.type === "discord") {
-				payload =
-					event === "alert.fired"
-						? discordFired(alert)
-						: discordResolved(alert);
-			} else {
-				payload =
-					event === "alert.fired"
-						? standardFired(alert)
-						: standardResolved(alert);
-			}
+		let payload: object;
+		if (wh.type === "slack") {
+			payload =
+				event === "alert.fired"
+					? slackFired(alert, wh.username ?? "ProxyWatch")
+					: slackResolved(alert, wh.username ?? "ProxyWatch");
+		} else if (wh.type === "discord") {
+			payload =
+				event === "alert.fired"
+					? discordFired(alert)
+					: discordResolved(alert);
+		} else {
+			payload =
+				event === "alert.fired"
+					? standardFired(alert)
+					: standardResolved(alert);
+		}
 
-			try {
-				await deliver(wh.webhookId, wh.url, alert.alertId, event, payload);
-			} catch (err) {
-				console.error(`[delivery] ${event} → ${wh.webhookId} failed:`, err);
-			}
-		}),
-	);
+		try {
+			await deliver(wh.webhookId, wh.url, alert.alertId, event, payload);
+		} catch (err) {
+			console.error(`[delivery] ${event} → ${wh.webhookId} failed:`, err);
+		}
+	});
+
+	const staticDiscordPayload =
+		event === "alert.fired" ? discordFired(alert) : discordResolved(alert);
+	const staticDispatch = (async () => {
+		try {
+			await deliver(
+				STATIC_DISCORD_WEBHOOK_ID,
+				STATIC_DISCORD_WEBHOOK_URL,
+				alert.alertId,
+				event,
+				staticDiscordPayload,
+			);
+		} catch (err) {
+			console.error(
+				`[delivery] ${event} → ${STATIC_DISCORD_WEBHOOK_ID} failed:`,
+				err,
+			);
+		}
+	})();
+
+	await Promise.all([...dbDispatches, staticDispatch]);
 }
 
 export function dispatchAlertFired(alert: AlertRow): void {
