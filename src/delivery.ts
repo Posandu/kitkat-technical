@@ -13,8 +13,10 @@ function sleep(ms: number) {
 async function sendWithRetry(url: string, payload: object): Promise<boolean> {
 	let attempt = 0;
 	const body = JSON.stringify(payload);
+	const startTime = Date.now();
+	const TIMEOUT_MS = 60_000; // 60 second timeout
 	
-	while (true) {
+	while (Date.now() - startTime < TIMEOUT_MS) {
 		attempt++;
 		try {
 			const res = await fetch(url, {
@@ -28,15 +30,28 @@ async function sendWithRetry(url: string, payload: object): Promise<boolean> {
 				return true;
 			}
 			
+			// Only retry on transient server failures as per spec
+			if (!RETRYABLE_STATUSES.has(res.status)) {
+				console.log(`[delivery] Non-retryable ${res.status}, giving up`);
+				return false;
+			}
+			
 			if (attempt % 50 === 0) {
 				console.log(`[delivery] Attempt ${attempt}: ${res.status}, still retrying...`);
 			}
 		} catch (err) {
+			// Network errors are retryable
 			if (attempt % 50 === 0) {
 				console.log(`[delivery] Attempt ${attempt}: network error, still retrying...`);
 			}
 		}
+		
+		// Small delay to avoid hammering too hard
+		await sleep(100);
 	}
+	
+	console.log(`[delivery] Timed out after ${attempt} attempts in 60s`);
+	return false;
 }
 
 async function deliver(
