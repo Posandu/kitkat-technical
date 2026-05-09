@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { proxies as proxiesTable, proxyHistory, alerts as alertsTable } from "./db/schema";
 import { getConfig } from "./routes/config";
+import { dispatchAlertFired, dispatchAlertResolved } from "./delivery";
 
 const THRESHOLD = 0.2;
 
@@ -77,21 +78,27 @@ async function evaluateAlerts(now: string): Promise<void> {
 		.limit(1);
 
 	if (failureRate >= THRESHOLD && !activeAlert) {
-		await db.insert(alertsTable).values({
-			alertId: newAlertId(),
-			status: "active",
-			failureRate,
-			totalProxies: total,
-			failedProxies: downProxies.length,
-			failedProxyIds: JSON.stringify(downProxies.map((p) => p.id)),
-			threshold: THRESHOLD,
-			firedAt: now,
-			message: "Proxy pool failure rate exceeded threshold",
-		});
+		const [inserted] = await db
+			.insert(alertsTable)
+			.values({
+				alertId: newAlertId(),
+				status: "active",
+				failureRate,
+				totalProxies: total,
+				failedProxies: downProxies.length,
+				failedProxyIds: JSON.stringify(downProxies.map((p) => p.id)),
+				threshold: THRESHOLD,
+				firedAt: now,
+				message: "Proxy pool failure rate exceeded threshold",
+			})
+			.returning();
+		dispatchAlertFired(inserted);
 	} else if (failureRate < THRESHOLD && activeAlert) {
-		await db
+		const [updated] = await db
 			.update(alertsTable)
 			.set({ status: "resolved", resolvedAt: now })
-			.where(eq(alertsTable.alertId, activeAlert.alertId));
+			.where(eq(alertsTable.alertId, activeAlert.alertId))
+			.returning();
+		dispatchAlertResolved(updated);
 	}
 }

@@ -41,3 +41,11 @@ export const webhooks = sqliteTable("webhooks", {
 	username: text("username"),
 	events: text("events"),
 });
+
+export const webhookDeliveries = sqliteTable("webhook_deliveries", {
+	id: int("id").primaryKey({ autoIncrement: true }),
+	webhookId: text("webhook_id").notNull(),
+	alertId: text("alert_id").notNull(),
+	event: text("event").notNull(),
+	deliveredAt: text("delivered_at").notNull(),
+});
