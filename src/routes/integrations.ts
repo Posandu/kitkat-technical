@@ -1,6 +1,7 @@
 import { Elysia, t } from "elysia";
 
 import { createIntegration } from "../services/delivery";
+import { importSampleWebhookIntegrations } from "../services/webhook-samples";
 
 export const integrationsRoutes = new Elysia().post(
   "/integrations",
@@ -25,6 +26,24 @@ export const integrationsRoutes = new Elysia().post(
     detail: {
       tags: ["Integrations"],
       summary: "Register a Slack or Discord integration"
+    }
+  }
+).post(
+  "/integrations/import",
+  async ({ set }) => {
+    const imported = await importSampleWebhookIntegrations();
+    set.status = 200;
+
+    return {
+      status: "ok",
+      importedCount: imported.length,
+      imported
+    };
+  },
+  {
+    detail: {
+      tags: ["Integrations"],
+      summary: "Import sample Slack and Discord webhook integrations from txt files"
     }
   }
 );

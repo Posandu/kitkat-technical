@@ -38,7 +38,9 @@ Pairing with the main project
 - Use PATCH /config to change cadence, request timeout, and failure threshold immediately.
 - Use GET /state to read the canonical monitoring state shared by the API and webhooks.
 - Use POST /integrations to register Slack and Discord receivers.
+- Use POST /integrations/import to import the sample Slack and Discord webhook txt files into the database.
 - Consume alert.fired and alert.resolved from the registered receivers.
+- On startup, the app also seeds sample Slack and Discord integrations from [slack-webhook.sample.txt](slack-webhook.sample.txt) and [discord-webhook.sample.txt](discord-webhook.sample.txt) when those files are present.
 
 Watchman loop
 - Reads active proxy targets from SQLite.

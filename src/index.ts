@@ -6,6 +6,7 @@ import { integrationsRoutes } from "./routes/integrations";
 import { proxyTargetRoutes } from "./routes/proxy-targets";
 import { stateRoutes } from "./routes/state";
 import { webhookRoutes } from "./routes/webhooks";
+import { seedSampleWebhookIntegrations } from "./services/webhook-samples";
 import { startWatchmanLoop } from "./watchman/probes";
 import { loadRuntimeConfig } from "./services/runtime";
 
@@ -33,6 +34,9 @@ const app = new Elysia()
 
 void loadRuntimeConfig();
 void startWatchmanLoop();
+void seedSampleWebhookIntegrations().catch((error) => {
+  console.error("Failed to seed sample webhook integrations", error);
+});
 
 const port = Number(process.env.PORT ?? "3000");
 
