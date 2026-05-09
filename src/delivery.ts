@@ -11,7 +11,7 @@ function sleep(ms: number) {
 }
 
 async function sendWithRetry(url: string, payload: object): Promise<void> {
-	let delay = 1000;
+	const delay = 5_000;
 	while (true) {
 		try {
 			const res = await fetch(url, {
@@ -19,15 +19,16 @@ async function sendWithRetry(url: string, payload: object): Promise<void> {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(payload),
 			});
+			if (res.status >= 200 && res.status < 300) {
+				return;
+			}
 			if (RETRYABLE_STATUSES.has(res.status)) {
 				await sleep(delay);
-				delay = Math.min(delay * 2, 30_000);
 				continue;
 			}
 			return;
 		} catch {
 			await sleep(delay);
-			delay = Math.min(delay * 2, 30_000);
 		}
 	}
 }
