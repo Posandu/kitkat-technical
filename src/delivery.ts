@@ -8,57 +8,69 @@ import {
 
 type AlertRow = typeof alertsTable.$inferSelect;
 
-const WEBHOOK_TIMEOUT_MS = 10_000;
-const BASE_DELAY_MS = 1_000;
-const MAX_DELAY_MS = 30_000;
-const TRANSIENT_FAILURES = new Set([500, 502, 503, 504]);
+const RETRYABLE_STATUSES = new Set([500, 502, 503, 504]);
+const MAX_REDIRECTS = 5;
 
-const STATIC_DISCORD_WEBHOOK_URL =
-	process.env.DISCORD_WEBHOOK_URL ??
-	"https://discord.com/api/webhooks/1502580067061071902/QdRIzAC0AOnuCYSAcGFWR1iV7U_BT-3Y66_05S5pKVBcxMkLP3rPE-OJNdUP6sb-RNGR";
-const STATIC_DISCORD_WEBHOOK_ID = "wh-static-discord";
+class NonRetryableDeliveryError extends Error {}
 
 function sleep(ms: number) {
 	return new Promise<void>((r) => setTimeout(r, ms));
 }
 
-function isRetryableStatus(status: number): boolean {
-	return TRANSIENT_FAILURES.has(status);
-}
-
-function parseRetryAfter(header: string | null): number | null {
-	if (!header) return null;
-	const seconds = Number(header);
-	if (Number.isFinite(seconds) && seconds >= 0) {
-		return Math.min(seconds * 1000, MAX_DELAY_MS);
-	}
-	const dateMs = Date.parse(header);
-	if (Number.isFinite(dateMs)) {
-		return Math.max(0, Math.min(dateMs - Date.now(), MAX_DELAY_MS));
-	}
-	return null;
-}
-
-async function sendWithRetry(url: string, payload: object): Promise<boolean> {
-	let delay = BASE_DELAY_MS;
-	let lastError = "unknown error";
-
+async function sendWithRetry(url: string, payload: object): Promise<void> {
+	let delay = 1000;
+	const body = JSON.stringify(payload);
 	while (true) {
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
 
 		let res: Response;
 		try {
-			res = await fetch(url, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(payload),
-				signal: controller.signal,
-			});
+			let currentUrl = url;
+			let redirects = 0;
+			let res: Response;
+
+			while (true) {
+				res = await fetch(currentUrl, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body,
+					redirect: "manual",
+				});
+
+				if (res.status >= 300 && res.status < 400) {
+					const location = res.headers.get("location");
+					if (!location) break;
+					if (redirects >= MAX_REDIRECTS) {
+						throw new NonRetryableDeliveryError(
+							`${url}: too many redirects`,
+						);
+					}
+					try {
+						currentUrl = new URL(location, currentUrl).toString();
+					} catch {
+						throw new NonRetryableDeliveryError(
+							`${url}: invalid redirect location`,
+						);
+					}
+					redirects += 1;
+					continue;
+				}
+
+				break;
+			}
+
+			if (res.status >= 200 && res.status < 300) return;
+			if (RETRYABLE_STATUSES.has(res.status)) {
+				await sleep(delay);
+				delay = Math.min(delay * 2, 30_000);
+				continue;
+			}
+			throw new NonRetryableDeliveryError(
+				`${url}: non-retryable status ${res.status}`,
+			);
 		} catch (err) {
-			clearTimeout(timer);
-			lastError =
-				err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+			if (err instanceof NonRetryableDeliveryError) throw err;
 			await sleep(delay);
 			delay = Math.min(delay * 2, MAX_DELAY_MS);
 			continue;
