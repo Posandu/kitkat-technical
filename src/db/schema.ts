@@ -1,8 +1,7 @@
 import { int, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-export const users = sqliteTable("users", {
+export const config = sqliteTable("config", {
 	id: int().primaryKey({ autoIncrement: true }),
-	name: text().notNull(),
-	email: text().notNull().unique(),
-	createdAt: int({ mode: "timestamp" }).$defaultFn(() => new Date()),
+	checkIntervalSeconds: int("check_interval_seconds").notNull().default(15),
+	requestTimeoutMs: int("request_timeout_ms").notNull().default(3000),
 });
