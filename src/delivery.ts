@@ -248,18 +248,14 @@ async function dispatchToAll(alert: AlertRow, event: "alert.fired" | "alert.reso
 	);
 }
 
-export async function dispatchAlertFired(alert: AlertRow): Promise<void> {
-	try {
-		await dispatchToAll(alert, "alert.fired");
-	} catch (err) {
-		console.error("[delivery] dispatchAlertFired error:", err);
-	}
+export function dispatchAlertFired(alert: AlertRow): void {
+	dispatchToAll(alert, "alert.fired").catch((err) =>
+		console.error("[delivery] dispatchAlertFired error:", err)
+	);
 }
 
-export async function dispatchAlertResolved(alert: AlertRow): Promise<void> {
-	try {
-		await dispatchToAll(alert, "alert.resolved");
-	} catch (err) {
-		console.error("[delivery] dispatchAlertResolved error:", err);
-	}
+export function dispatchAlertResolved(alert: AlertRow): void {
+	dispatchToAll(alert, "alert.resolved").catch((err) =>
+		console.error("[delivery] dispatchAlertResolved error:", err)
+	);
 }

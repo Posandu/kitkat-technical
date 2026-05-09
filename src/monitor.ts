@@ -95,7 +95,7 @@ export async function evaluateAlertState(now?: string): Promise<void> {
 			})
 			.returning();
 		console.log(`[monitor] Alert fired: ${inserted.alertId} (rate=${(failureRate*100).toFixed(0)}%)`);
-		await dispatchAlertFired(inserted);
+		dispatchAlertFired(inserted);
 	} else if (breached && activeAlert) {
 		await db
 			.update(alertsTable)
@@ -120,6 +120,6 @@ export async function evaluateAlertState(now?: string): Promise<void> {
 			.where(eq(alertsTable.alertId, activeAlert.alertId))
 			.returning();
 		console.log(`[monitor] Alert resolved: ${activeAlert.alertId}`);
-		await dispatchAlertResolved(updated);
+		dispatchAlertResolved(updated);
 	}
 }
